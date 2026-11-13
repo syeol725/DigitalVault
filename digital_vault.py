@@ -242,7 +242,7 @@ class Vault:
             print("파일 선택이 취소되었습니다.")
             return
 
-        source = Path(str(source).strip('"\\' ')).expanduser()
+        source = Path(str(source).strip().strip('"').strip("'")).expanduser()
         if not source.exists() or not source.is_file():
             print(f"파일이 존재하지 않습니다: {source}")
             return

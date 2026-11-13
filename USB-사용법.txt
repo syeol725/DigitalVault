@@ -2,48 +2,53 @@ DigitalVault Portable - USB 사용 안내
 
 [지원 운영체제]
 Windows 10 / 11 64비트 전용
-macOS 및 Linux 미지원
 
-1. 설치 및 실행
-① GitHub Actions에서 DigitalVault-Windows-x64 다운로드
-② ZIP 파일 압축 해제
-③ USB에 압축 해제된 파일 복사
-④ DigitalVault.exe 실행
+1. 실행 파일 준비
+① GitHub 저장소의 Actions 탭으로 이동
+② Build Windows DigitalVault 실행 결과 선택
+③ DigitalVault-Windows-x64 아티팩트 다운로드
+④ ZIP 압축 해제
+⑤ DigitalVault.exe를 USB에 복사
 
 2. 최초 실행
-① 금고 저장 폴더 지정
-② 새 금고 생성
-③ 비밀번호 설정
+① USB에서 DigitalVault.exe 실행
+② 금고 저장 폴더 질문에서 Enter 입력
+③ 새 비밀번호 입력 및 확인
 ④ 설정한 비밀번호로 로그인
 
 기본 저장 위치:
 USB 드라이브:\DigitalVaultData
 
 3. 문서 관리
-- 문서 추가
-- 문서 목록
-- 문서 열기
-- 문서 내보내기
-- 문서 삭제
-- 비밀번호 변경
-- 금고 잠금 및 종료
+1. 문서 추가
+2. 문서 목록
+3. 문서 열기
+4. 문서 내보내기
+5. 문서 삭제
+6. 비밀번호 변경
+0. 금고 잠금 및 종료
+
+각 작업을 마치면 계속 사용할지 묻습니다.
+계속하려면 y, 금고를 잠그고 종료하려면 n을 입력합니다.
 
 4. 문서 내보내기
-암호화된 문서를 복호화하여 지정한 위치에 저장합니다.
-내보낸 파일은 일반 파일이므로 금고 외부에서는 암호화되지 않습니다.
+내보낸 문서는 금고 외부에 일반 파일로 저장되며 암호화 상태가 아닙니다.
 
 5. 금고 백업
-DigitalVaultData 폴더를 별도 저장장치에 백업하는 것을 권장합니다.
+DigitalVaultData 폴더 전체를 별도 저장장치에 백업하세요.
+백업 파일도 안전한 장소에 보관하세요.
 
 6. 프로그램 업데이트
-① 새 버전의 DigitalVault.exe 다운로드
-② 기존 실행 파일 교체
-③ 기존 DigitalVaultData 폴더 유지
+① 새 DigitalVault.exe를 다운로드
+② USB의 기존 실행 파일 교체
+③ DigitalVaultData 폴더는 유지
 
 7. 주의사항
-- 비밀번호를 안전하게 보관하세요.
+- 비밀번호를 잊으면 복구할 수 없습니다.
 - USB 분리 전 프로그램을 정상 종료하세요.
-- 금고 데이터 폴더를 삭제하지 마세요.
+- 금고 데이터 폴더를 삭제하거나 이름을 바꾸지 마세요.
+- 문서를 열면 임시 복호화 파일이 생성되며, 프로그램이 삭제를 시도합니다. 완전한 흔적 제거는 보장되지 않습니다.
+- 이전 버전의 금고 데이터와 호환되지 않을 수 있습니다.
 
 DigitalVault Portable
-Windows 64비트 전용
+Windows 10 / 11 64비트 전용

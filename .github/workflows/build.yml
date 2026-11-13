@@ -1,5 +1,5 @@
 
-name: Build portable apps
+name: Build Windows DigitalVault
 
 on:
   workflow_dispatch:
@@ -12,21 +12,7 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            artifact: DigitalVault-Windows-x64
-            executable: dist/DigitalVault.exe
-          - os: macos-latest
-            artifact: DigitalVault-macOS
-            executable: dist/DigitalVault
-          - os: ubuntu-latest
-            artifact: DigitalVault-Linux-x64
-            executable: dist/DigitalVault
-
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
 
     steps:
       - name: Checkout source
@@ -46,19 +32,17 @@ jobs:
         run: |
           python -m PyInstaller --clean --noconfirm --onefile --console --name DigitalVault digital_vault.py
 
-      - name: Prepare portable package
-        shell: bash
+      - name: Prepare package
         run: |
-          mkdir -p package
-          cp "${{ matrix.executable }}" package/
-          cp README.md package/
-          cp USB-사용법.txt package/
-          cp LICENSE.txt package/
-          echo "DigitalVaultData/" > package/USB_DATA_FOLDER.txt
+          New-Item -ItemType Directory -Force package
+          Copy-Item dist/DigitalVault.exe package/
+          Copy-Item README.md package/
+          Copy-Item USB-사용법.txt package/
+          Copy-Item LICENSE.txt package/
 
-      - name: Upload build artifact
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: DigitalVault-Windows-x64
           path: package/
           if-no-files-found: error

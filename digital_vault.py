@@ -111,12 +111,12 @@ def default_vault_directory():
 def prompt_new_password():
     while True:
         password = getpass.getpass("새 비밀번호: ")
-        confirm = getpass.getpass("비밀번호 확인: ")
 
         if len(password) < 8:
-            print("비밀번호는 8자 이상이어야 합니다.")
+            print("비밀번호는 8자 이상이어야 합니다. 다시 입력하세요.")
             continue
 
+        confirm = getpass.getpass("비밀번호 확인: ")
         if password != confirm:
             print("비밀번호가 일치하지 않습니다.")
             continue
@@ -296,9 +296,33 @@ class Vault:
 
         info = self.index[file_id]
         original_ext = info["extension"]
-        destination = Path(
-            input("저장할 파일 경로: ").strip().strip('"')
-        ).expanduser()
+
+        root = None
+        try:
+            root = Tk()
+            root.withdraw()
+            destination_text = filedialog.asksaveasfilename(
+                title="문서 내보내기 위치 선택",
+                initialfile=info["name"],
+                defaultextension=original_ext,
+                filetypes=[
+                    (f"원본 형식 (*{original_ext})", f"*{original_ext}"),
+                    ("모든 파일", "*.*"),
+                ],
+                confirmoverwrite=False,
+            )
+        except Exception as error:
+            print(f"저장 위치 선택 창을 열 수 없습니다: {error}")
+            return
+        finally:
+            if root is not None:
+                root.destroy()
+
+        if not destination_text:
+            print("문서 내보내기를 취소했습니다.")
+            return
+
+        destination = Path(destination_text).expanduser()
 
         if destination.suffix.lower() != original_ext.lower():
             if destination.suffix:
@@ -314,13 +338,16 @@ class Vault:
                 print("저장을 취소했습니다.")
                 return
 
-        data = decrypt(
-            self.key,
-            (self.docs / (file_id + ".bin")).read_bytes(),
-        )
-        atomic_write(destination, data)
-        print(f"문서 내보내기 완료: {destination}")
-        print("내보낸 파일은 금고 외부에 일반 파일로 저장됩니다.")
+        try:
+            data = decrypt(
+                self.key,
+                (self.docs / (file_id + ".bin")).read_bytes(),
+            )
+            atomic_write(destination, data)
+            print(f"문서 내보내기 완료: {destination}")
+            print("내보낸 파일은 금고 외부에 일반 파일로 저장됩니다.")
+        except Exception as error:
+            print(f"문서 내보내기 중 오류가 발생했습니다: {error}")
 
     def open_document(self):
         file_id = self.choose_id()

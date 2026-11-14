@@ -26,7 +26,6 @@ class DigitalVaultApp:
         self.root.configure(bg="#F5F7FB")
         self.vault = None
         self.tree = None
-        self.meta_tree = None
         self._style()
         self._login_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
@@ -187,7 +186,6 @@ class DigitalVaultApp:
     def _clear(self):
         # 이전 화면의 Treeview 위젯 참조가 남으면 재로그인 시 TclError가 발생한다.
         self.tree = None
-        self.meta_tree = None
         for child in self.root.winfo_children():
             child.destroy()
 
@@ -245,40 +243,31 @@ class DigitalVaultApp:
                               highlightthickness=1, highlightbackground="#E6EAF0")
         table_card.pack(fill="both", expand=True)
 
-        # 파일명과 나머지 열을 분리해 가로 스크롤이 파일명 영역에만 적용되게 합니다.
+        # 하나의 Treeview에 파일명·형식·크기를 함께 배치해 열과 행이 어긋나지 않게 합니다.
+        # 체크박스는 파일명 셀 안쪽의 왼쪽 여백에 표시합니다.
+        self.checked_ids = set()
         table_body = tk.Frame(table_card, bg="#FFFFFF")
         table_body.pack(fill="both", expand=True)
-        name_panel = tk.Frame(table_body, bg="#FFFFFF")
-        name_panel.pack(side="left", fill="both", expand=True)
-        meta_panel = tk.Frame(table_body, bg="#FFFFFF")
-        meta_panel.pack(side="left", fill="y", expand=False)
 
         self.tree = ttk.Treeview(
-            name_panel, columns=("name",), show="headings", selectmode="extended"
+            table_body, columns=("name", "type", "size"),
+            show="headings", selectmode="extended"
         )
         self.tree.heading("name", text="파일명", anchor="w")
-        self.tree.column("name", width=520, minwidth=300, anchor="w", stretch=False)
+        self.tree.heading("type", text="형식", anchor="center")
+        self.tree.heading("size", text="암호화 크기", anchor="e")
+        self.tree.column("name", width=590, minwidth=360, anchor="w", stretch=True)
+        self.tree.column("type", width=105, minwidth=105, anchor="center", stretch=False)
+        self.tree.column("size", width=155, minwidth=155, anchor="e", stretch=False)
         self.tree.pack(side="top", fill="both", expand=True)
+
         name_scroll = ttk.Scrollbar(
-            name_panel, orient="horizontal", command=self.tree.xview
+            table_body, orient="horizontal", command=self.tree.xview
         )
         name_scroll.pack(side="bottom", fill="x")
         self.tree.configure(xscrollcommand=name_scroll.set)
 
-        self.meta_tree = ttk.Treeview(
-            meta_panel, columns=("type", "size"), show="headings", selectmode="none"
-        )
-        self.meta_tree.heading("type", text="형식", anchor="center")
-        self.meta_tree.heading("size", text="암호화 크기", anchor="e")
-        self.meta_tree.column("type", width=100, minwidth=100, anchor="center", stretch=False)
-        self.meta_tree.column("size", width=150, minwidth=150, anchor="e", stretch=False)
-        self.meta_tree.pack(side="left", fill="both", expand=True)
-
-        def scroll_rows(*args):
-            self.tree.yview(*args)
-            self.meta_tree.yview(*args)
-
-        scrollbar = ttk.Scrollbar(table_body, orient="vertical", command=scroll_rows)
+        scrollbar = ttk.Scrollbar(table_body, orient="vertical", command=self.tree.yview)
         scrollbar.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scrollbar.set)
 
@@ -290,22 +279,13 @@ class DigitalVaultApp:
             else:
                 units = -1 if event.delta > 0 else 1
             self.tree.yview_scroll(units, "units")
-            self.meta_tree.yview_moveto(self.tree.yview()[0])
             return "break"
 
-        for widget in (self.tree, self.meta_tree):
-            widget.bind("<MouseWheel>", sync_mousewheel)
-            widget.bind("<Button-4>", sync_mousewheel)
-            widget.bind("<Button-5>", sync_mousewheel)
-            widget.bind("<Double-1>", lambda _e: self._open_document())
-
-        def select_from_metadata(event):
-            row = self.meta_tree.identify_row(event.y)
-            if row:
-                self.tree.selection_set(row)
-                self.tree.focus(row)
-
-        self.meta_tree.bind("<Button-1>", select_from_metadata)
+        self.tree.bind("<MouseWheel>", sync_mousewheel)
+        self.tree.bind("<Button-4>", sync_mousewheel)
+        self.tree.bind("<Button-5>", sync_mousewheel)
+        self.tree.bind("<Button-1>", self._on_document_click, add="+")
+        self.tree.bind("<Double-1>", lambda _e: self._open_document())
         self._refresh_documents()
 
     def _dialog_window(self, title, width=560, height=260):
@@ -552,27 +532,46 @@ class DigitalVaultApp:
     def _refresh_documents(self):
         if not self.vault or self.tree is None:
             return
-        for widget in (self.tree, self.meta_tree):
-            for item in widget.get_children():
-                widget.delete(item)
+        for item in self.tree.get_children():
+            self.tree.delete(item)
         total = 0
         documents = self._documents()
+        visible_ids = {file_id for file_id, _info in documents}
+        self.checked_ids.intersection_update(visible_ids)
         name_font = tkfont.Font(family="Malgun Gothic", size=10)
         longest_name = max(
-            [520] + [name_font.measure(info["name"]) + 36 for _file_id, info in documents]
+            [590] + [name_font.measure(info["name"]) + 76 for _file_id, info in documents]
         )
-        self.tree.column("name", width=longest_name, minwidth=300, stretch=False)
+        self.tree.column("name", width=max(590, longest_name), minwidth=360, stretch=True)
         for file_id, info in documents:
             path = self.vault.docs / (file_id + ".bin")
             size = path.stat().st_size if path.exists() else 0
             total += size
-            self.tree.insert("", "end", iid=file_id, values=(info["name"],))
-            self.meta_tree.insert(
+            marker = "☑" if file_id in self.checked_ids else "☐"
+            self.tree.insert(
                 "", "end", iid=file_id,
-                values=(info["extension"].lstrip(".").upper(), self._format_size(size))
+                values=(f"{marker}    {info['name']}",
+                        info["extension"].lstrip(".").upper(),
+                        self._format_size(size))
             )
         self.count_label.configure(text=f"{len(self.vault.index)}개")
         self.size_label.configure(text=self._format_size(total))
+
+    def _on_document_click(self, event):
+        # 파일명 열의 가장 왼쪽 영역만 체크박스 클릭 영역으로 사용합니다.
+        if self.tree.identify_column(event.x) != "#1" or event.x > 42:
+            return
+        file_id = self.tree.identify_row(event.y)
+        if not file_id:
+            return
+        if file_id in self.checked_ids:
+            self.checked_ids.remove(file_id)
+        else:
+            self.checked_ids.add(file_id)
+        info = self.vault.index[file_id]
+        marker = "☑" if file_id in self.checked_ids else "☐"
+        self.tree.set(file_id, "name", f"{marker}    {info['name']}")
+        return "break"
 
     @staticmethod
     def _format_size(size):
@@ -583,11 +582,13 @@ class DigitalVaultApp:
         return f"{size / (1024 ** 2):.2f} MB"
 
     def _selected_ids(self):
-        selected = set(self.tree.selection())
+        selected = set(self.checked_ids)
         if not selected:
-            self._show_message("info", "문서 선택", "먼저 문서를 선택하세요.", parent=self.root)
+            selected = set(self.tree.selection())
+        if not selected:
+            self._show_message("info", "문서 선택", "먼저 체크박스로 문서를 선택하세요.", parent=self.root)
             return []
-        # 목록에 보이는 순서대로 대기열을 구성합니다.
+        # 체크된 문서도 화면에 표시된 순서대로 처리합니다.
         return [item for item in self.tree.get_children() if item in selected]
 
     def _add_document(self):
@@ -723,6 +724,14 @@ class DigitalVaultApp:
     def _rename_document(self):
         ids = self._selected_ids()
         if not ids:
+            return
+        if len(ids) > 1:
+            self._show_message(
+                "warning", "이름 변경 안내",
+                "이름 변경은 한 번에 한 문서만 가능합니다.\n"
+                "체크된 문서를 1개만 남긴 뒤 다시 시도하세요.",
+                parent=self.root
+            )
             return
         file_id = ids[0]
         old = self.vault.index[file_id]["name"]

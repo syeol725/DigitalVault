@@ -889,36 +889,42 @@ class DigitalVaultApp:
         window.title("백업 복원 미리보기")
         window.configure(bg="#F5F7FB")
         window.transient(self.root)
-        window.geometry("900x620")
+        window.geometry("1000x680")
         window.minsize(760, 500)
 
         card = tk.Frame(window, bg="#FFFFFF", padx=22, pady=18)
         card.pack(fill="both", expand=True, padx=14, pady=14)
         tk.Label(card, text="백업 복원 미리보기", bg="#FFFFFF", fg="#202938",
                  font=("Malgun Gothic", 16, "bold")).pack(anchor="w")
+        duplicate_count = sum(
+            1 for doc in preview["documents"] if doc.get("duplicate_in_backup")
+        )
         summary = (
             f"백업 문서 {preview['document_count']}개  ·  신규 {preview['new_count']}개  ·  "
-            f"이름 충돌 {preview['collision_count']}개\n"
-            "충돌 항목은 처리 칸을 더블클릭해 선택하세요. 기본값은 기존 문서 유지입니다."
+            f"이름 충돌 {preview['collision_count']}개  ·  백업 내 중복 {duplicate_count}개\\n"
+            "충돌 문서는 처리 칸을 더블클릭해 유지 또는 교체를 선택할 수 있습니다. "
+            "백업 내부 중복 문서는 뒤에 '(복원 n)'을 붙여 별도 추가합니다."
         )
         tk.Label(card, text=summary, bg="#FFFFFF", fg="#667085",
-                 font=("Malgun Gothic", 9), justify="left", wraplength=820
+                 font=("Malgun Gothic", 9), justify="left", wraplength=900
                  ).pack(anchor="w", pady=(8, 14))
 
         table_frame = tk.Frame(card, bg="#FFFFFF")
         table_frame.pack(fill="both", expand=True)
-        columns = ("name", "extension", "size", "state", "choice")
+        columns = ("name", "restore_name", "extension", "size", "state", "choice")
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
         headings = {
-            "name": ("파일명", 330, "w"),
-            "extension": ("형식", 90, "center"),
-            "size": ("백업 크기", 110, "e"),
-            "state": ("비교 결과", 110, "center"),
-            "choice": ("충돌 처리", 150, "center"),
+            "name": ("백업 파일명", 210, "w"),
+            "restore_name": ("복원 후 파일명", 240, "w"),
+            "extension": ("형식", 70, "center"),
+            "size": ("백업 크기", 100, "e"),
+            "state": ("비교 결과", 130, "center"),
+            "choice": ("처리 방식", 150, "center"),
         }
         for column, (label, width, anchor) in headings.items():
             tree.heading(column, text=label)
-            tree.column(column, width=width, anchor=anchor, stretch=(column == "name"))
+            tree.column(column, width=width, anchor=anchor,
+                        stretch=(column in {"name", "restore_name"}))
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
         tree.pack(side="left", fill="both", expand=True)
@@ -927,51 +933,70 @@ class DigitalVaultApp:
         source_by_iid = {}
         for doc in preview["documents"]:
             collision = bool(doc["collision_id"])
+            duplicate = bool(doc.get("duplicate_in_backup"))
+            state = "백업 내 중복" if duplicate else (
+                "이름 충돌" if collision else "신규 문서"
+            )
+            choice = "자동 이름 변경" if duplicate else (
+                "기존 문서 유지" if collision else "추가 예정"
+            )
             iid = tree.insert("", "end", values=(
-                doc["name"], doc["extension"].upper(), f"{doc['size']:,} B",
-                "이름 충돌" if collision else "신규 문서",
-                "기존 문서 유지" if collision else "추가 예정",
+                doc["name"], doc.get("restore_name", doc["name"]),
+                doc["extension"].upper(), f"{doc['size']:,} B", state, choice,
             ))
             source_by_iid[iid] = doc
+
         def toggle_choice(event):
             iid = tree.identify_row(event.y)
             column = tree.identify_column(event.x)
-            if not iid or column != "#5":
+            if not iid or column != "#6":
                 return
             doc = source_by_iid[iid]
             if not doc["collision_id"]:
                 return
             values = list(tree.item(iid, "values"))
-            values[4] = "백업 문서로 교체" if values[4] == "기존 문서 유지" else "기존 문서 유지"
+            values[5] = (
+                "백업 문서로 교체"
+                if values[5] == "기존 문서 유지" else "기존 문서 유지"
+            )
             tree.item(iid, values=values)
         tree.bind("<Double-1>", toggle_choice)
 
-        note = tk.Label(card,
-            text="※ 백업 문서는 암호화 해제 검증까지 완료된 경우에만 표시됩니다. 병합 전 현재 금고를 자동 백업합니다.",
+        note = tk.Label(
+            card,
+            text="※ 백업 문서는 암호화 해제 검증까지 완료된 경우에만 표시됩니다. "
+                 "복원 전 현재 금고를 자동 백업합니다.",
             bg="#FFFFFF", fg="#667085", font=("Malgun Gothic", 8),
-            wraplength=820, justify="left")
+            wraplength=900, justify="left"
+        )
         note.pack(anchor="w", pady=(12, 8))
 
         actions = tk.Frame(card, bg="#FFFFFF")
         actions.pack(fill="x")
-        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(actions, text="취소", command=window.destroy).pack(
+            side="right", padx=(8, 0)
+        )
+
         def apply_merge():
             choices = {}
             for iid, doc in source_by_iid.items():
                 if doc["collision_id"]:
-                    value = tree.item(iid, "values")[4]
-                    choices[doc["id"]] = "replace" if value == "백업 문서로 교체" else "keep"
+                    value = tree.item(iid, "values")[5]
+                    choices[doc["id"]] = (
+                        "replace" if value == "백업 문서로 교체" else "keep"
+                    )
             if not self._ask_yes_no(
                 "복원 확인",
-                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\n"
-                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개입니다.\n"
+                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\\n"
+                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개입니다.\\n"
                 "계속할까요?",
                 parent=window
             ):
                 return
             window.destroy()
             self._apply_backup_merge(archive, password, choices)
-        ttk.Button(actions, text="복원 진행", style="Accent.TButton",
+
+        ttk.Button(actions, text="복원 적용", style="Accent.TButton",
                    command=apply_merge).pack(side="right")
         window.grab_set()
         window.focus_set()

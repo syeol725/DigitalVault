@@ -1028,6 +1028,7 @@ class DigitalVaultApp:
                 f"신규 추가: {summary.get('added', count)}개\n"
                 f"기존 문서 교체: {summary.get('replaced', 0)}개\n"
                 f"기존 문서 유지: {summary.get('skipped', 0)}개\n"
+                f"백업 내 중복 제외: {summary.get('duplicate_skipped', 0)}개\n"
                 f"복원 전 자동 백업: {safety_path}\n"
                 f"기존 금고 문서 {current_count}개는 보존 기준으로 처리했습니다.",
                 parent=self.root

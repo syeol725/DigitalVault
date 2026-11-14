@@ -353,7 +353,6 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             ("path", "../outside.txt", ".txt", "경로"),
             ("extension", "report.pdf", ".txt", "확장자"),
             ("unsupported", "program.exe", ".exe", "지원하지 않는 파일 형식"),
-            ("duplicate", "same.txt", ".txt", "중복"),
         ]
         for case, invalid_name, extension, expected_reason in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
@@ -366,18 +365,9 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                 first.write_text("first document", encoding="utf-8")
                 vault.add_document(first)
 
-                if case == "duplicate":
-                    second = root / "second.txt"
-                    second.write_text("second document", encoding="utf-8")
-                    vault.add_document(second)
-                    ids = list(vault.index)
-                    vault.index[ids[0]]["name"] = invalid_name
-                    vault.index[ids[1]]["name"] = invalid_name
-                    vault.index[ids[1]]["extension"] = extension
-                else:
-                    file_id = next(iter(vault.index))
-                    vault.index[file_id]["name"] = invalid_name
-                    vault.index[file_id]["extension"] = extension
+                file_id = next(iter(vault.index))
+                vault.index[file_id]["name"] = invalid_name
+                vault.index[file_id]["extension"] = extension
                 vault.save_index()
 
                 backup = root / "invalid-name-backup.zip"

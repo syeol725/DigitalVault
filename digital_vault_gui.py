@@ -292,7 +292,7 @@ class DigitalVaultApp:
         return sorted(self.vault.index.items(), key=lambda item: item[1]["name"].casefold())
 
     def _refresh_documents(self):
-        if not self.vault or not hasattr(self, "tree"):
+        if not self.vault or self.tree is None:
             return
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -356,7 +356,7 @@ class DigitalVaultApp:
         ext = info["extension"]
         destination = filedialog.asksaveasfilename(
             title="문서를 저장할 위치 선택", initialfile=info["name"],
-            defaultextension=ext,
+            defaultextension=ext, confirmoverwrite=True,
             filetypes=[(f"원본 형식 (*{ext})", f"*{ext}"), ("모든 파일", "*.*")],
             parent=self.root)
         if not destination:
@@ -526,7 +526,7 @@ class DigitalVaultApp:
 
     def _create_backup(self):
         destination = filedialog.asksaveasfilename(
-            title="금고 백업 저장", defaultextension=".zip",
+            title="금고 백업 저장", defaultextension=".zip", confirmoverwrite=True,
             filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
             parent=self.root)
         if not destination:

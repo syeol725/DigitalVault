@@ -128,7 +128,9 @@ def timed_input(prompt, timeout):
                 ready, _, _ = select.select([sys.stdin], [], [], 0.1)
                 if not ready:
                     continue
-                ch = sys.stdin.read(1)
+                ch = os.read(fd, 1).decode("utf-8", errors="ignore")
+                if not ch:
+                    continue
                 code = ord(ch)
                 if code in (10, 13):
                     print()

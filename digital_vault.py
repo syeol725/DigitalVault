@@ -271,15 +271,19 @@ def masked_password(prompt, timeout=None):
         return getpass.getpass(prompt)
     return getpass.getpass(prompt)
 
-def prompt_new_password():
+def prompt_new_password(timeout=None):
     while True:
-        password = masked_password("새 비밀번호: ")
+        password = masked_password("새 비밀번호: ", timeout)
+        if password is None:
+            raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
 
         if len(password) < 8:
             print("비밀번호는 8자 이상이어야 합니다. 다시 입력하세요.")
             continue
 
-        confirm = masked_password("비밀번호 확인: ")
+        confirm = masked_password("비밀번호 확인: ", timeout)
+        if confirm is None:
+            raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
         if password != confirm:
             print("비밀번호가 일치하지 않습니다.")
             continue

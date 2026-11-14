@@ -907,8 +907,7 @@ class DigitalVaultApp:
         summary = (
             f"백업 문서 {preview['document_count']}개  ·  신규 {preview['new_count']}개  ·  "
             f"이름 충돌 {preview['collision_count']}개  ·  백업 내 중복 {duplicate_count}개(복원 제외)\n"
-            "백업 내부 중복 문서는 미리보기에만 표시하고 복원하지 않습니다. "
-            "충돌 문서는 처리 칸을 더블클릭해 유지 또는 교체를 선택할 수 있습니다."
+            "이름이 겹치는 문서는 현재 금고의 문서를 유지하고, 백업 내부 중복 문서는 복원하지 않습니다."
         )
         tk.Label(card, text=summary, bg="#FFFFFF", fg="#667085",
                  font=("Malgun Gothic", 9), justify="left", wraplength=900
@@ -922,9 +921,8 @@ class DigitalVaultApp:
         )
         note = tk.Label(
             card,
-            text="적용 방법: 충돌 문서는 '처리 방식' 칸을 더블클릭해 유지 또는 교체를 선택한 뒤, "
-                 "'복원 적용'을 누르세요. 백업 내부 중복 문서는 복원 대상에서 제외됩니다. "
-                 "적용 전 현재 금고는 자동 백업됩니다.",
+            text="복원 적용을 누르면 신규 문서만 추가됩니다. 기존 금고와 이름이 겹치는 문서는 현재 문서를 유지하고, "
+                 "백업 내부 중복 문서는 복원 대상에서 제외됩니다.",
             bg="#FFFFFF", fg="#667085", font=("Malgun Gothic", 8),
             wraplength=900, justify="left"
         )
@@ -932,14 +930,14 @@ class DigitalVaultApp:
 
         table_frame = tk.Frame(card, bg="#FFFFFF")
         table_frame.pack(fill="both", expand=True)
-        columns = ("name", "extension", "size", "state", "choice")
+        columns = ("name", "extension", "size", "state", "action")
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
         headings = {
             "name": ("백업 파일명", 280, "w"),
             "extension": ("형식", 80, "center"),
             "size": ("백업 크기", 110, "e"),
             "state": ("비교 결과", 150, "center"),
-            "choice": ("처리 방식", 170, "center"),
+            "action": ("복원 처리", 150, "center"),
         }
         for column, (label, width, anchor) in headings.items():
             tree.heading(column, text=label)
@@ -956,42 +954,19 @@ class DigitalVaultApp:
             state = "백업 내 중복" if duplicate else (
                 "이름 충돌" if collision else "신규 문서"
             )
-            choice = "복원 제외" if duplicate else (
+            action = "복원 제외" if duplicate else (
                 "기존 문서 유지" if collision else "추가 예정"
             )
             iid = tree.insert("", "end", values=(
-                doc["name"], doc["extension"].upper(),
-                f"{doc['size']:,} B", state, choice,
+                doc["name"], doc["extension"].upper().lstrip("."),
+                f"{doc['size']:,} B", state, action,
             ))
             source_by_iid[iid] = doc
 
-        def toggle_choice(event):
-            iid = tree.identify_row(event.y)
-            column = tree.identify_column(event.x)
-            if not iid or column != "#6":
-                return
-            doc = source_by_iid[iid]
-            if doc.get("duplicate_in_backup") or not doc["collision_id"]:
-                return
-            values = list(tree.item(iid, "values"))
-            values[4] = (
-                "백업 문서로 교체"
-                if values[4] == "기존 문서 유지" else "기존 문서 유지"
-            )
-            tree.item(iid, values=values)
-        tree.bind("<Double-1>", toggle_choice)
-
         def apply_merge():
-            choices = {}
-            for iid, doc in source_by_iid.items():
-                if doc["collision_id"]:
-                    value = tree.item(iid, "values")[4]
-                    choices[doc["id"]] = (
-                        "replace" if value == "백업 문서로 교체" else "keep"
-                    )
             if not self._ask_yes_no(
                 "복원 확인",
-                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\n"
+                f"현재 금고의 기존 문서는 유지하고 신규 문서만 추가합니다.\n"
                 f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개, "
                 f"중복 제외 {duplicate_count}개입니다.\n"
                 "계속할까요?",
@@ -999,28 +974,17 @@ class DigitalVaultApp:
             ):
                 return
             window.destroy()
-            self._apply_backup_merge(archive, password, choices)
+            self._apply_backup_merge(archive, password)
 
         ttk.Button(actions, text="복원 적용", style="Accent.TButton",
                    command=apply_merge).pack(side="right")
         window.grab_set()
         window.focus_set()
 
-    def _apply_backup_merge(self, archive, password, choices):
+    def _apply_backup_merge(self, archive, password):
         try:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            safety_path = self.vault.folder.parent / (
-                f"{self.vault.folder.name}-pre-restore-{stamp}.zip"
-            )
-            suffix = 1
-            while safety_path.exists():
-                safety_path = self.vault.folder.parent / (
-                    f"{self.vault.folder.name}-pre-restore-{stamp}-{suffix}.zip"
-                )
-                suffix += 1
             current_count = len(self.vault.index)
-            self.vault.create_backup(safety_path)
-            count = self.vault.merge_backup(archive, password, choices)
+            count = self.vault.merge_backup(archive, password)
             self._refresh_documents()
             summary = getattr(self.vault, "last_merge_summary", {})
             self._show_message(
@@ -1029,8 +993,7 @@ class DigitalVaultApp:
                 f"기존 문서 교체: {summary.get('replaced', 0)}개\n"
                 f"기존 문서 유지: {summary.get('skipped', 0)}개\n"
                 f"백업 내 중복 제외: {summary.get('duplicate_skipped', 0)}개\n"
-                f"복원 전 자동 백업: {safety_path}\n"
-                f"기존 금고 문서 {current_count}개는 보존 기준으로 처리했습니다.",
+                f"기존 금고 문서 {current_count}개는 보존했습니다.",
                 parent=self.root
             )
         except Exception as error:

@@ -150,6 +150,14 @@ def timed_input(prompt, timeout):
     print("입력 대기 시간이 초과되어 금고를 잠급니다.")
     return None
 
+
+def read_input(prompt):
+    value = timed_input(prompt, IDLE_TIMEOUT_SECONDS)
+    if value is None:
+        raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
+    return value
+
+
 def atomic_write(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(path.name + ".tmp")
@@ -500,7 +508,7 @@ class Vault:
 
         self.list_documents()
         try:
-            number = int(input("문서 번호: "))
+            number = int(read_input("문서 번호: "))
             if 1 <= number <= len(items):
                 return items[number - 1][0]
         except ValueError:
@@ -551,7 +559,7 @@ class Vault:
             destination = destination.with_suffix(original_ext)
 
         if destination.exists():
-            answer = input(
+            answer = read_input(
                 "같은 이름의 파일이 있습니다. 덮어쓸까요? (y/n): "
             ).strip().lower()
             if answer != "y":
@@ -593,7 +601,7 @@ class Vault:
             except OSError: pass
 
             os.startfile(str(temp_file))
-            input(
+            read_input(
                 "문서 확인을 마친 후 Enter를 누르면 임시 파일이 정리됩니다."
             )
         except Exception as error:
@@ -611,7 +619,7 @@ class Vault:
         items = list(self.index.items())
         self.list_documents()
 
-        raw_numbers = input(
+        raw_numbers = read_input(
             "삭제할 문서 번호 (여러 개는 쉼표로 구분): "
         ).strip()
 
@@ -637,7 +645,7 @@ class Vault:
         for name in selected_names:
             print(f"- {name}")
 
-        answer = input(
+        answer = read_input(
             f"선택한 문서 {len(selected_ids)}개를 삭제할까요? (y/n): "
         ).strip().lower()
 
@@ -743,7 +751,7 @@ def main():
                 new = prompt_new_password()
                 vault.change_password(old, new)
             elif choice == "7":
-                answer = input("마스터 키를 재발급하고 모든 문서를 재암호화할까요? (y/n): ").strip().lower()
+                answer = read_input("마스터 키를 재발급하고 모든 문서를 재암호화할까요? (y/n): ").strip().lower()
                 if answer == "y":
                     current = masked_password("현재 비밀번호: ")
                     vault.rotate_master_key(current)
@@ -754,7 +762,7 @@ def main():
                 continue
 
             while True:
-                answer = input(
+                answer = read_input(
                     "\n작업을 계속하시겠습니까? (y/n): "
                 ).strip().lower()
                 if answer == "y":
@@ -764,6 +772,9 @@ def main():
                     return
                 print("y 또는 n을 입력하세요.")
 
+    except TimeoutError as error:
+        print(f"\n{error}")
+        vault.lock()
     except (KeyboardInterrupt, EOFError):
         print("\n프로그램을 종료합니다.")
     except Exception as error:

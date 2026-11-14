@@ -519,6 +519,7 @@ class Vault:
             data = decrypt(
                 self.key,
                 (self.docs / (file_id + ".bin")).read_bytes(),
+                ("DigitalVault:document:v2:" + file_id).encode(),
             )
 
             temp_dir = Path(tempfile.mkdtemp(prefix=self.temp_prefix))
@@ -592,9 +593,13 @@ class Vault:
     def change_password(self, old_password, new_password):
         try:
             meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+            if meta.get("format_version") != FORMAT_VERSION:
+                raise ValueError("지원하지 않는 금고 포맷입니다.")
             salt = base64.b64decode(meta["salt"], validate=True)
             wrapped = base64.b64decode(meta["wrapped_key"], validate=True)
-            master = decrypt(derive_key(old_password, salt), wrapped)
+            master = decrypt(
+                derive_key(old_password, salt, meta.get("kdf")), wrapped, WRAP_AAD
+            )
 
             new_salt = secrets.token_bytes(16)
             new_wrapped = encrypt(derive_key(new_password, new_salt), master, WRAP_AAD)

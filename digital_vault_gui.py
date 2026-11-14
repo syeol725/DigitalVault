@@ -901,7 +901,7 @@ class DigitalVaultApp:
         )
         summary = (
             f"백업 문서 {preview['document_count']}개  ·  신규 {preview['new_count']}개  ·  "
-            f"이름 충돌 {preview['collision_count']}개  ·  백업 내 중복 {duplicate_count}개\\n"
+            f"이름 충돌 {preview['collision_count']}개  ·  백업 내 중복 {duplicate_count}개\n"
             "충돌 문서는 처리 칸을 더블클릭해 유지 또는 교체를 선택할 수 있습니다. "
             "백업 내부 중복 문서는 뒤에 '(복원 n)'을 붙여 별도 추가합니다."
         )
@@ -987,8 +987,8 @@ class DigitalVaultApp:
                     )
             if not self._ask_yes_no(
                 "복원 확인",
-                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\\n"
-                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개입니다.\\n"
+                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\n"
+                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개입니다.\n"
                 "계속할까요?",
                 parent=window
             ):

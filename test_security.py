@@ -1,4 +1,5 @@
 import contextlib
+import base64
 import io
 import tempfile
 import unittest
@@ -320,6 +321,90 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(restored.login("backup-password-123"))
             self.assertTrue(restored.integrity_check())
             self.assertEqual(len(restored.index), 1)
+
+
+    def test_backup_preview_reports_conflicts_and_rejects_wrong_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            source.create("source-password-123")
+            doc = root / "shared.txt"
+            doc.write_text("backup version", encoding="utf-8")
+            source.add_document(doc)
+            backup = root / "backup.zip"
+            source.create_backup(backup)
+
+            target = Vault(root / "target")
+            target.create("target-password-123")
+            doc.write_text("current version", encoding="utf-8")
+            target.add_document(doc)
+
+            preview = target.inspect_backup(backup, "source-password-123")
+            self.assertEqual(preview["document_count"], 1)
+            self.assertEqual(preview["collision_count"], 1)
+            self.assertEqual(preview["new_count"], 0)
+            with self.assertRaises(Exception):
+                target.inspect_backup(backup, "wrong-password-123")
+
+    def test_backup_merge_conflict_keep_and_replace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            source.create("source-password-123")
+            source_doc = root / "same.txt"
+            source_doc.write_text("backup version", encoding="utf-8")
+            source.add_document(source_doc)
+            backup = root / "backup.zip"
+            source.create_backup(backup)
+
+            target = Vault(root / "target")
+            target.create("target-password-123")
+            target_doc = root / "same.txt"
+            target_doc.write_text("current version", encoding="utf-8")
+            target.add_document(target_doc)
+            target_id = next(iter(target.index))
+
+            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "keep"})
+            self.assertEqual(target.last_merge_summary["skipped"], 1)
+            current = decrypt(
+                target.key, (target.docs / (target_id + ".bin")).read_bytes(),
+                ("DigitalVault:document:v2:" + target_id).encode()
+            )
+            self.assertEqual(current, b"current version")
+
+            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "replace"})
+            self.assertEqual(target.last_merge_summary["replaced"], 1)
+            replaced = decrypt(
+                target.key, (target.docs / (target_id + ".bin")).read_bytes(),
+                ("DigitalVault:document:v2:" + target_id).encode()
+            )
+            self.assertEqual(replaced, b"backup version")
+            self.assertEqual(len(target.index), 1)
+
+    def test_security_log_chain_detects_tampering_and_survives_key_rotation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Vault(Path(directory) / "vault")
+            vault.create("audit-password-123")
+            vault.log_event("test_one")
+            vault.log_event("test_two")
+            self.assertTrue(vault.verify_security_log())
+
+            path = vault.folder / "security.log"
+            lines = path.read_text(encoding="ascii").splitlines()
+            first = bytearray(base64.b64decode(lines[0]))
+            first[-1] ^= 1
+            lines[0] = base64.b64encode(first).decode("ascii")
+            path.write_text("\n".join(lines) + "\n", encoding="ascii")
+            self.assertFalse(vault.verify_security_log())
+
+    def test_security_log_rotation_rechains_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Vault(Path(directory) / "vault")
+            vault.create("audit-rotate-password-123")
+            vault.log_event("before_rotation")
+            new_key = vault.rotate_master_key("audit-rotate-password-123")
+            self.assertIsNotNone(new_key)
+            self.assertTrue(vault.verify_security_log())
 
 
 if __name__ == "__main__":

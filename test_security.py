@@ -21,6 +21,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             root = Path(directory)
             vault = Vault(root / "vault")
             vault.create("initial-password-123")
+            recovery_key = vault.recovery_key_display
 
             source = root / "sample.txt"
             source.write_text("DigitalVault test document", encoding="utf-8")
@@ -35,7 +36,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(reopened.login("updated-password-456"))
             self.assertEqual(len(reopened.index), 1)
 
-            reopened.rotate_master_key("updated-password-456")
+            reopened.rotate_master_key("updated-password-456", recovery_key)
             self.assertNotEqual(reopened.key, original_key)
 
             new_session = Vault(root / "vault")
@@ -48,6 +49,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                 aad,
             )
             self.assertEqual(plaintext, b"DigitalVault test document")
+            self.assertTrue(new_session.integrity_check())
 
     def test_kdf_rejects_untrusted_parameters(self):
         with self.assertRaises(ValueError):
@@ -57,3 +59,40 @@ class DigitalVaultSecurityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_recovery_key_resets_password_without_changing_documents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("initial-password-123")
+            recovery_key = vault.recovery_key_display
+            source = root / "recover.txt"
+            source.write_text("recovery test", encoding="utf-8")
+            vault.add_document(source)
+
+            reopened = Vault(root / "vault")
+            self.assertTrue(reopened.recover_with_key(
+                recovery_key, "replacement-password-789"
+            ))
+            session = Vault(root / "vault")
+            self.assertTrue(session.login("replacement-password-789"))
+            self.assertEqual(len(session.index), 1)
+            self.assertTrue(session.integrity_check())
+
+    def test_backup_restore_preserves_encrypted_vault(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("backup-password-123")
+            source = root / "backup.txt"
+            source.write_text("backup payload", encoding="utf-8")
+            vault.add_document(source)
+            backup = root / "vault-backup.zip"
+            self.assertGreaterEqual(vault.create_backup(backup), 3)
+
+            restored_path = Vault.restore_backup(backup, root / "restored-vault")
+            restored = Vault(restored_path)
+            self.assertTrue(restored.login("backup-password-123"))
+            self.assertTrue(restored.integrity_check())
+            self.assertEqual(len(restored.index), 1)

@@ -2,6 +2,7 @@
 """DigitalVault Portable - Windows 10/11 USB document vault."""
 
 import base64
+import csv
 import getpass
 import hashlib
 import json
@@ -13,7 +14,7 @@ import tempfile
 import time
 import zipfile
 import unicodedata
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, filedialog
@@ -882,6 +883,39 @@ class Vault:
             except Exception:
                 print("{}  [읽을 수 없는 기록]".format(number))
         print("※ USB 내부 기록은 완전한 위변조 방지를 보장하지 않습니다.")
+
+    def export_security_log(self, destination):
+        """복호화한 보안 기록을 Excel 호환 UTF-8 CSV로 내보냅니다."""
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 보안 기록을 내보낼 수 있습니다.")
+
+        destination = Path(destination).expanduser()
+        source = self.folder / "security.log"
+        if source.exists() and destination.resolve() == source.resolve():
+            raise ValueError("보안 기록 원본 파일에는 내보낼 수 없습니다.")
+
+        output = StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(["번호", "발생 시각(UTC)", "이벤트", "상태"])
+
+        lines = source.read_text(encoding="ascii").splitlines() if source.exists() else []
+        for number, line in enumerate(lines, 1):
+            try:
+                record = json.loads(decrypt(
+                    self.key, base64.b64decode(line, validate=True),
+                    b"DigitalVault:audit:v1"
+                ))
+                timestamp = str(record.get("time", ""))
+                event = str(record.get("event", ""))
+                # 스프레드시트에서 수식으로 해석될 수 있는 셀 접두 문자를 무력화합니다.
+                if event.startswith(("=", "+", "-", "@", "\t", "\r")):
+                    event = "'" + event
+                writer.writerow([number, timestamp, event, "정상"])
+            except Exception:
+                writer.writerow([number, "", "", "읽을 수 없는 기록"])
+
+        atomic_write(destination, output.getvalue().encode("utf-8-sig"))
+        return len(lines)
 
     def integrity_check(self):
         print("\n===== 금고 무결성 검사 =====")

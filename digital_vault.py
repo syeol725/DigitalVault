@@ -140,18 +140,6 @@ def truncate_display(value, width):
     return shortened + "…"
 
 
-def unique_restore_name(name, used_names):
-    """이미 사용된 이름과 겹치지 않는 복원 파일명을 예약해 반환합니다."""
-    stem, suffix = Path(name).stem, Path(name).suffix
-    candidate = name
-    number = 1
-    while candidate.casefold() in used_names:
-        candidate = f"{stem} (복원 {number}){suffix}"
-        number += 1
-    used_names.add(candidate.casefold())
-    return candidate
-
-
 def center_display(value, width):
     value = str(value)
     padding = max(0, width - display_width(value))
@@ -1143,7 +1131,7 @@ class Vault:
         existing = {}
         for file_id, info in self.index.items():
             existing.setdefault(info.get("name", "").casefold(), (file_id, info))
-        seen_source_names, reserved_names, documents = set(), set(existing), []
+        seen_source_names, documents = set(), []
         for old_id, info in source_index.items():
             if (not isinstance(old_id, str) or len(old_id) != 24
                     or any(ch not in "0123456789abcdef" for ch in old_id)
@@ -1178,20 +1166,16 @@ class Vault:
             normalized_name = name.casefold()
             duplicate_in_backup = normalized_name in seen_source_names
             seen_source_names.add(normalized_name)
-            if duplicate_in_backup:
-                restore_name = unique_restore_name(name, reserved_names)
-                collision = None
-            else:
-                restore_name = name
-                reserved_names.add(normalized_name)
-                collision = existing.get(normalized_name)
+            collision = (
+                existing.get(normalized_name) if not duplicate_in_backup else None
+            )
             source_path = f"documents/{old_id}.bin"
             if source_path not in payloads:
                 raise ValueError(f"백업 문서 파일이 없습니다: {name}")
             aad = ("DigitalVault:document:v2:" + old_id).encode()
             plain = decrypt(source_key, payloads[source_path], aad)
             documents.append({
-                "id": old_id, "name": name, "restore_name": restore_name,
+                "id": old_id, "name": name,
                 "duplicate_in_backup": duplicate_in_backup,
                 "extension": extension.lower(), "size": len(plain),
                 "collision_id": collision[0] if collision else None,
@@ -1201,12 +1185,17 @@ class Vault:
         expected_docs = {f"documents/{doc['id']}.bin" for doc in documents}
         if extra_docs != expected_docs:
             raise ValueError("백업 문서 목록과 실제 문서 파일이 일치하지 않습니다.")
-        collisions = sum(1 for doc in documents if doc["collision_id"])
+        duplicate_count = sum(1 for doc in documents if doc["duplicate_in_backup"])
+        collisions = sum(
+            1 for doc in documents
+            if not doc["duplicate_in_backup"] and doc["collision_id"]
+        )
         return {
             "created_utc": manifest.get("created_utc", ""),
             "document_count": len(documents),
-            "new_count": len(documents) - collisions,
+            "new_count": len(documents) - duplicate_count - collisions,
             "collision_count": collisions,
+            "duplicate_count": duplicate_count,
             "documents": documents,
         }
 
@@ -1220,7 +1209,7 @@ class Vault:
         previous_index = self.index.copy()
         staged_new, staged_replace = {}, {}
         applied_new, applied_replace = [], []
-        added = replaced = skipped = 0
+        added = replaced = skipped = duplicate_skipped = 0
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
                 manifest = json.loads(archive.read("backup_manifest.json"))
@@ -1245,19 +1234,17 @@ class Vault:
                 info.get("name", "").casefold(): (file_id, info)
                 for file_id, info in self.index.items()
             }
-            used_names = set(existing_by_name)
             staged_index = previous_index.copy()
 
             seen_source_names = set()
             for old_id, info in source_index.items():
                 name = info["name"]
                 normalized_name = name.casefold()
-                duplicate_in_backup = normalized_name in seen_source_names
+                if normalized_name in seen_source_names:
+                    duplicate_skipped += 1
+                    continue
                 seen_source_names.add(normalized_name)
-                collision = (
-                    existing_by_name.get(normalized_name)
-                    if not duplicate_in_backup else None
-                )
+                collision = existing_by_name.get(normalized_name)
                 source_aad = ("DigitalVault:document:v2:" + old_id).encode()
                 plain = decrypt(source_key, payloads[f"documents/{old_id}.bin"], source_aad)
                 if collision:
@@ -1277,14 +1264,13 @@ class Vault:
                     replaced += 1
                     continue
 
-                new_name = unique_restore_name(name, used_names)
                 new_id = secrets.token_hex(12)
                 while new_id in staged_index:
                     new_id = secrets.token_hex(12)
                 new_aad = ("DigitalVault:document:v2:" + new_id).encode()
                 staged_new[new_id] = encrypt(self.key, plain, new_aad)
                 staged_index[new_id] = {
-                    "name": new_name, "extension": info["extension"].lower()
+                    "name": name, "extension": info["extension"].lower()
                 }
                 added += 1
 
@@ -1320,6 +1306,7 @@ class Vault:
             })
             self.last_merge_summary = {
                 "added": added, "replaced": replaced, "skipped": skipped,
+                "duplicate_skipped": duplicate_skipped,
             }
             try:
                 self.log_event("backup_merged")

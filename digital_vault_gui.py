@@ -252,8 +252,11 @@ class DigitalVaultApp:
     def _authenticate(self):
         folder_text = self.folder_var.get().strip()
         password = self.password_var.get()
-        if not folder_text or not password:
-            self._show_message("warning", "입력 확인", "금고 위치와 비밀번호를 입력하세요.", parent=self.root)
+        if not folder_text:
+            self._show_message("warning", "입력 확인", "금고 저장 위치를 입력하세요.", parent=self.root)
+            return
+        if not password.strip():
+            self._show_message("warning", "입력 확인", "비밀번호를 입력하세요.", parent=self.root)
             return
         try:
             vault = Vault(Path(folder_text).expanduser())
@@ -604,13 +607,25 @@ class DigitalVaultApp:
         actions.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
 
+        value = tk.StringVar(value=initial or "")
+        validation = tk.Label(
+            card, text="", bg="#FFFFFF", fg="#C0392B",
+            font=("Malgun Gothic", 8), anchor="w"
+        )
+
         def submit():
+            if show and not value.get().strip():
+                validation.configure(
+                    text="비밀번호를 입력하세요." if "비밀번호" in prompt_text else "내용을 입력하세요."
+                )
+                validation.pack(side="bottom", anchor="w", pady=(6, 0))
+                entry.focus_set()
+                return
             result["value"] = value.get()
             window.destroy()
 
         ttk.Button(actions, text="확인", style="Accent.TButton", command=submit).pack(side="right")
 
-        value = tk.StringVar(value=initial or "")
         input_entry_box = tk.Frame(
             card, bg="#FFFFFF", highlightthickness=1,
             highlightbackground="#D8DEE8", highlightcolor="#315ECA"
@@ -1105,8 +1120,9 @@ class DigitalVaultApp:
                         stretch=(column == "name"))
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
-        tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        # 메인 문서 목록의 카드 하단 여백과 비슷한 비율로 미리보기 표 아래 공간을 확보합니다.
+        tree.pack(side="left", fill="both", expand=True, pady=(0, 15))
+        scroll.pack(side="right", fill="y", pady=(0, 15))
 
         for doc in preview["documents"]:
             collision = bool(doc["collision_id"])

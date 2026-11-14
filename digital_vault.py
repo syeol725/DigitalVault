@@ -128,7 +128,7 @@ def timed_input(prompt, timeout, refresh=None):
         else:
             line = prompt + "".join(chars)
 
-        sys.stdout.write("\\r" + line + " " * max(0, last_rendered - len(line)))
+        sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
         sys.stdout.flush()
         last_rendered = len(line)
 
@@ -1334,7 +1334,7 @@ def main():
             elif choice == "I":
                 current = masked_password("현재 비밀번호: ")
                 recovery = vault.setup_recovery_key(current)
-                print("\\n새 복구 키 (한 번만 표시):")
+                print("\n새 복구 키 (한 번만 표시):")
                 print(recovery)
                 print("별도 장소에 안전하게 보관하세요.")
             elif choice == "J":

@@ -39,7 +39,7 @@ jobs:
 
       - name: Build executable
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --console --name DigitalVault digital_vault.py
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --hidden-import digital_vault_gui --name DigitalVault digital_vault.py
 
       - name: Prepare package
         shell: pwsh

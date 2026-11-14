@@ -308,7 +308,41 @@ class Vault:
         self.temp_prefix = "digitalvault_" + hashlib.sha256(
             str(self.folder.resolve()).encode("utf-8")
         ).hexdigest()[:12] + "_"
+        self.recover_interrupted_merge()
         self.cleanup_stale_temp_files()
+
+    def recover_interrupted_merge(self):
+        """비정상 종료로 중단된 병합을 시작 전 상태로 되돌립니다."""
+        journal_path = self.folder / ".merge-recovery.json"
+        if not journal_path.exists():
+            return
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        stage_name = journal.get("stage")
+        if (not isinstance(stage_name, str) or not stage_name.startswith(".vault-merge-")
+                or Path(stage_name).name != stage_name):
+            raise RuntimeError("중단된 병합 복구 정보가 올바르지 않습니다.")
+        stage = self.folder / stage_name
+        state = journal.get("state")
+        if state == "applying":
+            for file_id in journal.get("replace_ids", []):
+                if not isinstance(file_id, str) or len(file_id) != 24:
+                    raise RuntimeError("중단된 병합의 문서 식별자가 올바르지 않습니다.")
+                backup = stage / (file_id + ".old")
+                if not backup.is_file():
+                    raise RuntimeError("중단된 병합의 원본 문서를 찾을 수 없습니다: " + file_id)
+                atomic_write(self.docs / (file_id + ".bin"), backup.read_bytes())
+            for file_id in journal.get("new_ids", []):
+                if not isinstance(file_id, str) or len(file_id) != 24:
+                    raise RuntimeError("중단된 병합의 신규 문서 식별자가 올바르지 않습니다.")
+                (self.docs / (file_id + ".bin")).unlink(missing_ok=True)
+            old_index = stage / "index.old"
+            if not old_index.is_file():
+                raise RuntimeError("중단된 병합의 이전 인덱스 백업을 찾을 수 없습니다.")
+            atomic_write(self.index_file, old_index.read_bytes())
+        elif state != "committed":
+            raise RuntimeError("중단된 병합의 복구 상태를 확인할 수 없습니다.")
+        shutil.rmtree(stage, ignore_errors=True)
+        journal_path.unlink(missing_ok=True)
 
     @property
     def exists(self):
@@ -1219,8 +1253,14 @@ class Vault:
                 (staged_dir / (file_id + ".new")).write_bytes(data)
                 original = (self.docs / (file_id + ".bin")).read_bytes()
                 (staged_dir / (file_id + ".old")).write_bytes(original)
+            (staged_dir / "index.old").write_bytes(self.index_file.read_bytes())
+            journal_path = self.folder / ".merge-recovery.json"
+            write_json(journal_path, {
+                "state": "applying", "stage": staged_dir.name,
+                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+            })
 
-            # 기존 파일은 stage에 원본을 보관한 뒤 교체하고, 인덱스는 마지막에 원자적으로 갱신합니다.
+            # 원본 파일과 인덱스 백업을 먼저 기록한 뒤 실제 문서를 교체합니다.
             for file_id in staged_replace:
                 os.replace(staged_dir / (file_id + ".new"), self.docs / (file_id + ".bin"))
                 applied_replace.append(file_id)
@@ -1233,6 +1273,10 @@ class Vault:
 
             self.index = staged_index
             self.save_index()
+            write_json(journal_path, {
+                "state": "committed", "stage": staged_dir.name,
+                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+            })
             self.last_merge_summary = {
                 "added": added, "replaced": replaced, "skipped": skipped,
             }
@@ -1251,10 +1295,20 @@ class Vault:
                     os.replace(backup, self.docs / (file_id + ".bin"))
             try:
                 self.save_index()
+                if "journal_path" in locals():
+                    journal_path.unlink(missing_ok=True)
             except Exception:
+                # 복구 정보는 남겨 두어 다음 실행 때 원본 상태로 복구할 수 있게 합니다.
                 pass
             raise
         finally:
+            if "journal_path" in locals() and journal_path.exists():
+                try:
+                    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+                    if journal.get("state") == "committed":
+                        journal_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
             shutil.rmtree(staged_dir, ignore_errors=True)
 
     @staticmethod

@@ -17,6 +17,9 @@ from digital_vault import (
 )
 
 
+IDLE_LOCK_MS = 5 * 60 * 1000
+
+
 class DigitalVaultApp:
     def __init__(self):
         self.root = tk.Tk()
@@ -25,9 +28,42 @@ class DigitalVaultApp:
         self.root.minsize(980, 660)
         self.root.configure(bg="#F5F7FB")
         self.vault = None
+        self._idle_lock_after_id = None
         self._style()
         self._login_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+        for sequence in ("<KeyPress>", "<ButtonPress>", "<Motion>", "<MouseWheel>"):
+            self.root.bind_all(sequence, self._on_activity, add="+")
+
+    def _on_activity(self, _event=None):
+        """금고가 열린 동안의 사용자 입력을 유휴 잠금 타이머에 반영합니다."""
+        if self.vault is not None and self.vault.key is not None:
+            self._schedule_idle_lock()
+
+    def _schedule_idle_lock(self):
+        if self._idle_lock_after_id is not None:
+            try:
+                self.root.after_cancel(self._idle_lock_after_id)
+            except tk.TclError:
+                pass
+            self._idle_lock_after_id = None
+        if self.vault is not None and self.vault.key is not None:
+            self._idle_lock_after_id = self.root.after(
+                IDLE_LOCK_MS, self._auto_lock
+            )
+
+    def _auto_lock(self):
+        self._idle_lock_after_id = None
+        if self.vault is not None and self.vault.key is not None:
+            self._lock(show_notice=True)
+
+    def _cancel_idle_lock(self):
+        if self._idle_lock_after_id is not None:
+            try:
+                self.root.after_cancel(self._idle_lock_after_id)
+            except tk.TclError:
+                pass
+            self._idle_lock_after_id = None
 
     def _style(self):
         style = ttk.Style(self.root)
@@ -259,6 +295,7 @@ class DigitalVaultApp:
         scrollbar.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self._toggle_tree_selection)
         self._refresh_documents()
+        self._schedule_idle_lock()
 
     def _dialog_window(self, title, width=560, height=260):
         window = tk.Toplevel(self.root)
@@ -524,6 +561,8 @@ class DigitalVaultApp:
 
     def _toggle_tree_selection(self, event):
         """Ctrl/Shift 없이 클릭할 때마다 해당 문서의 선택 상태를 전환합니다."""
+        # 이 핸들러는 기본 Treeview 클릭 동작을 막으므로 전역 이벤트 대신 직접 기록합니다.
+        self._on_activity(event)
         file_id = self.tree.identify_row(event.y)
         if not file_id:
             return "break"
@@ -714,6 +753,7 @@ class DigitalVaultApp:
             ("마스터 키 재발급", self._rotate_key),
             ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
+            ("보안 기록 CSV 내보내기", self._export_security_log),
         ])
 
     def _change_password(self):
@@ -781,6 +821,26 @@ class DigitalVaultApp:
             self.vault.show_security_log()
         self._text_window("보안 기록", output.getvalue())
 
+    def _export_security_log(self):
+        destination = filedialog.asksaveasfilename(
+            title="보안 기록 CSV 저장",
+            defaultextension=".csv",
+            confirmoverwrite=True,
+            filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")],
+            parent=self.root,
+        )
+        if not destination:
+            return
+        try:
+            count = self.vault.export_security_log(destination)
+            self._show_message(
+                "info", "내보내기 완료",
+                f"보안 기록을 CSV로 저장했습니다.\n포함 기록: {count}건",
+                parent=self.root,
+            )
+        except Exception as error:
+            self._show_message("error", "내보내기 실패", str(error), parent=self.root)
+
     def _backup_menu(self):
         self._tool_dialog("백업 및 복구", [
             ("금고 백업 만들기", self._create_backup),
@@ -798,8 +858,13 @@ class DigitalVaultApp:
         # asksaveasfilename의 기본 덮어쓰기 확인을 사용한다.
         # 확인 후 선택 창이 반환되므로 앱에서 같은 질문을 반복하지 않는다.
         try:
-            count = self.vault.create_backup(target, overwrite=True)
-            self._show_message("info", "백업 완료", f"백업을 만들었습니다.\n포함 파일: {count}개", parent=self.root)
+            document_count = len(self.vault.index)
+            self.vault.create_backup(target, overwrite=True)
+            self._show_message(
+                "info", "백업 완료",
+                f"백업을 만들었습니다.\n포함 문서: {document_count}개",
+                parent=self.root
+            )
         except Exception as error:
             self._show_message("error", "백업 실패", str(error), parent=self.root)
 
@@ -873,14 +938,22 @@ class DigitalVaultApp:
         widget.insert("1.0", text or "표시할 내용이 없습니다.")
         widget.configure(state="disabled")
 
-    def _lock(self):
+    def _lock(self, show_notice=False):
+        self._cancel_idle_lock()
         if self.vault and self.vault.key is not None:
             self.vault.lock()
         self.vault = None
         self._clear()
         self._login_screen()
+        if show_notice:
+            self._show_message(
+                "info", "자동 잠금",
+                "5분 동안 사용하지 않아 금고를 자동으로 잠갔습니다.\n다시 사용하려면 비밀번호를 입력하세요.",
+                parent=self.root
+            )
 
     def _close(self):
+        self._cancel_idle_lock()
         if self.vault and self.vault.key is not None:
             self.vault.lock()
         self.root.destroy()

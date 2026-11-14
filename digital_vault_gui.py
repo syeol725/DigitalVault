@@ -251,7 +251,7 @@ class DigitalVaultApp:
         name_panel = tk.Frame(table_body, bg="#FFFFFF")
         name_panel.pack(side="left", fill="both", expand=True)
         meta_panel = tk.Frame(table_body, bg="#FFFFFF")
-        meta_panel.pack(side="left", fill="y")
+        meta_panel.pack(side="left", fill="y", expand=False)
 
         self.tree = ttk.Treeview(
             name_panel, columns=("name",), show="headings", selectmode="extended"
@@ -272,7 +272,7 @@ class DigitalVaultApp:
         self.meta_tree.heading("size", text="암호화 크기", anchor="e")
         self.meta_tree.column("type", width=100, minwidth=100, anchor="center", stretch=False)
         self.meta_tree.column("size", width=150, minwidth=150, anchor="e", stretch=False)
-        self.meta_tree.pack(side="left", fill="y", expand=False)
+        self.meta_tree.pack(side="left", fill="both", expand=True)
 
         def scroll_rows(*args):
             self.tree.yview(*args)

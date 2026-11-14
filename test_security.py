@@ -407,5 +407,38 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(vault.verify_security_log())
 
 
+    def test_interrupted_merge_is_rolled_back_on_vault_startup(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "vault"
+            vault = Vault(folder)
+            vault.create("recovery-password-123")
+            source = Path(directory) / "original.txt"
+            source.write_text("original data", encoding="utf-8")
+            vault.add_document(source)
+            file_id = next(iter(vault.index))
+            original_doc = (vault.docs / (file_id + ".bin")).read_bytes()
+            original_index = vault.index_file.read_bytes()
+
+            stage = folder / ".vault-merge-interrupted"
+            stage.mkdir()
+            (stage / (file_id + ".old")).write_bytes(original_doc)
+            (stage / "index.old").write_bytes(original_index)
+            (vault.docs / (file_id + ".bin")).write_bytes(b"partially replaced")
+            new_id = "a" * 24
+            (vault.docs / (new_id + ".bin")).write_bytes(b"orphaned new file")
+            (folder / ".merge-recovery.json").write_text(json.dumps({
+                "state": "applying", "stage": stage.name,
+                "new_ids": [new_id], "replace_ids": [file_id],
+            }), encoding="utf-8")
+
+            recovered = Vault(folder)
+            self.assertEqual((recovered.docs / (file_id + ".bin")).read_bytes(), original_doc)
+            self.assertFalse((recovered.docs / (new_id + ".bin")).exists())
+            self.assertFalse((folder / ".merge-recovery.json").exists())
+            self.assertTrue(recovered.login("recovery-password-123"))
+            self.assertTrue(recovered.integrity_check())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -408,7 +408,7 @@ class Vault:
             except OSError:
                 pass
 
-    def rotate_master_key(self, password):
+    def rotate_master_key(self, password, recovery_key=None):
         """새 마스터 키로 재암호화하고 메타데이터까지 함께 교체합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 실행할 수 있습니다.")
@@ -431,6 +431,22 @@ class Vault:
             "salt": base64.b64encode(new_salt).decode("ascii"),
             "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
         }
+        if meta.get("recovery_salt") and meta.get("recovery_wrapped_key"):
+            if not recovery_key:
+                raise ValueError("복구 키가 있어야 마스터 키 재발급 후에도 복구 기능을 유지할 수 있습니다.")
+            recovery_salt = base64.b64decode(meta["recovery_salt"], validate=True)
+            old_recovery_master = decrypt(
+                derive_key(recovery_key, recovery_salt),
+                base64.b64decode(meta["recovery_wrapped_key"], validate=True),
+                b"DigitalVault:recovery-key:v1"
+            )
+            if not secrets.compare_digest(old_recovery_master, self.key):
+                raise ValueError("복구 키가 올바르지 않습니다.")
+            new_meta["recovery_salt"] = meta["recovery_salt"]
+            new_meta["recovery_wrapped_key"] = base64.b64encode(
+                encrypt(derive_key(recovery_key, recovery_salt), new_key,
+                        b"DigitalVault:recovery-key:v1")
+            ).decode("ascii")
 
         stage = self.folder / (".rotation-" + secrets.token_hex(8))
         staged_docs = stage / "documents"
@@ -523,6 +539,7 @@ class Vault:
                 "extension": source.suffix.lower(),
             }
             self.save_index()
+            self.log_event("document_added")
             print(f"'{source.name}' 문서를 금고에 저장했습니다.")
         except Exception as error:
             print("저장 오류:", error)
@@ -694,6 +711,7 @@ class Vault:
             del self.index[file_id]
 
         self.save_index()
+        self.log_event("document_deleted")
         print(f"문서 {len(selected_ids)}개를 삭제했습니다.")
 
     def change_password(self, old_password, new_password):
@@ -716,6 +734,7 @@ class Vault:
                 "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
             })
             write_json(self.meta_file, meta)
+            self.log_event("password_changed")
             print("비밀번호를 변경했습니다.")
         except Exception:
             print("비밀번호 변경에 실패했습니다. 현재 비밀번호를 확인하세요.")
@@ -735,6 +754,7 @@ class Vault:
         meta["recovery_salt"] = base64.b64encode(recovery_salt).decode("ascii")
         meta["recovery_wrapped_key"] = base64.b64encode(recovery_wrapped).decode("ascii")
         self._write_meta_atomic(meta)
+        self.log_event("recovery_key_issued")
         return recovery_key
 
     def _write_meta_atomic(self, meta):
@@ -762,7 +782,36 @@ class Vault:
         self._write_meta_atomic(meta)
         self.key, self.index = master, index
         write_json(self.lock_file, {"tries": 0, "until": 0})
+        self.log_event("password_recovered")
         return True
+
+    def log_event(self, event):
+        if self.key is None:
+            return
+        record = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "event": str(event)[:64]
+        }
+        sealed = encrypt(self.key, json.dumps(record).encode("utf-8"),
+                         b"DigitalVault:audit:v1")
+        with (self.folder / "security.log").open("a", encoding="ascii") as stream:
+            stream.write(base64.b64encode(sealed).decode("ascii") + "\n")
+
+    def show_security_log(self):
+        path = self.folder / "security.log"
+        if not path.exists():
+            print("보안 기록이 없습니다.")
+            return
+        for number, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+            try:
+                record = json.loads(decrypt(
+                    self.key, base64.b64decode(line, validate=True),
+                    b"DigitalVault:audit:v1"
+                ))
+                print("{}  {}  {}".format(number, record["time"], record["event"]))
+            except Exception:
+                print("{}  [읽을 수 없는 기록]".format(number))
+        print("※ USB 내부 기록은 완전한 위변조 방지를 보장하지 않습니다.")
 
     def integrity_check(self):
         print("\n===== 금고 무결성 검사 =====")
@@ -807,6 +856,7 @@ class Vault:
                 "files": manifest
             }, indent=2))
         atomic_write(destination, buffer.getvalue())
+        self.log_event("backup_created")
         return len(files)
 
     @staticmethod
@@ -946,11 +996,11 @@ def main():
             print("-" * 54)
             print(" [ 보안 관리 ]")
             print("  8. 비밀번호 변경      9. 마스터 키 재발급")
-            print(" 10. 복구 키 발급")
+            print(" 10. 복구 키 발급       11. 보안 기록 확인")
             print("-" * 54)
             print(" [ 금고 관리 ]")
-            print(" 11. 금고 백업          12. 금고 복원")
-            print(" 13. 무결성 검사        14. 금고 정보")
+            print(" 12. 금고 백업          13. 금고 복원")
+            print(" 14. 무결성 검사        15. 금고 정보")
             print("-" * 54)
             print("  0. 금고 잠금 및 종료")
             print(f"  ※ {IDLE_TIMEOUT_SECONDS // 60}분간 미사용 시 자동 잠금")
@@ -986,7 +1036,11 @@ def main():
                 answer = read_input("마스터 키를 재발급할까요? (y/n): ").strip().lower()
                 if answer == "y":
                     current = masked_password("현재 비밀번호: ")
-                    vault.rotate_master_key(current)
+                    meta = json.loads(vault.meta_file.read_text(encoding="utf-8"))
+                    recovery = None
+                    if meta.get("recovery_wrapped_key"):
+                        recovery = masked_password("복구 키 (복구 기능 유지용): ")
+                    vault.rotate_master_key(current, recovery)
                 else:
                     print("마스터 키 재발급을 취소했습니다.")
             elif choice == "10":
@@ -996,17 +1050,19 @@ def main():
                 print(recovery)
                 print("별도 장소에 안전하게 보관하세요.")
             elif choice == "11":
+                vault.show_security_log()
+            elif choice == "12":
                 destination = read_input("백업 파일 경로 (.zip): ").strip().strip('"')
                 if destination:
                     print(f"백업 완료: {vault.create_backup(destination)}개 파일")
-            elif choice == "12":
+            elif choice == "13":
                 archive = read_input("백업 ZIP 경로: ").strip().strip('"')
                 destination = read_input("새 복원 폴더 경로: ").strip().strip('"')
                 if archive and destination:
                     print("복원 완료:", Vault.restore_backup(archive, destination))
-            elif choice == "13":
-                vault.integrity_check()
             elif choice == "14":
+                vault.integrity_check()
+            elif choice == "15":
                 vault.show_vault_info()
             else:
                 print("메뉴 번호를 다시 선택하세요.")

@@ -46,6 +46,12 @@ class DigitalVaultApp:
         style.configure("Treeview.Heading", font=("Malgun Gothic", 9, "bold"),
                         background="#F3F6FB", foreground="#526078", relief="flat",
                         padding=(13, 13), borderwidth=0)
+        style.configure("Check.Treeview", rowheight=46, font=("Segoe UI Symbol", 14),
+                        background="#FFFFFF", fieldbackground="#FFFFFF",
+                        foreground="#315ECA", borderwidth=0, relief="flat")
+        style.configure("Check.Treeview.Heading", font=("Malgun Gothic", 8, "bold"),
+                        background="#F3F6FB", foreground="#526078", relief="flat",
+                        padding=(8, 13), borderwidth=0)
         style.map("Treeview", background=[("selected", "#E8F0FF")],
                   foreground=[("selected", "#173B83")])
         style.configure("TButton", font=("Malgun Gothic", 9, "bold"), padding=(15, 10),
@@ -198,6 +204,7 @@ class DigitalVaultApp:
         self.check_tree = None
         self.meta_tree = None
         self.selection_label = None
+        self.checked_ids.clear()
         for child in self.root.winfo_children():
             child.destroy()
 
@@ -273,7 +280,8 @@ class DigitalVaultApp:
         meta_panel.pack(side="left", fill="y", expand=False)
 
         self.check_tree = ttk.Treeview(
-            check_panel, columns=("check",), show="headings", selectmode="none"
+            check_panel, columns=("check",), show="headings",
+            selectmode="none", style="Check.Treeview"
         )
         self.check_tree.heading("check", text="선택", anchor="center")
         self.check_tree.column("check", width=58, minwidth=58, anchor="center", stretch=False)
@@ -324,7 +332,8 @@ class DigitalVaultApp:
             widget.bind("<MouseWheel>", sync_mousewheel)
             widget.bind("<Button-4>", sync_mousewheel)
             widget.bind("<Button-5>", sync_mousewheel)
-            widget.bind("<Double-1>", lambda _e: self._open_document())
+        self.tree.bind("<Double-1>", self._open_document_from_row)
+        self.meta_tree.bind("<Double-1>", self._open_document_from_row)
 
         def toggle_checkbox(event):
             region = self.check_tree.identify_region(event.x, event.y)
@@ -701,6 +710,15 @@ class DigitalVaultApp:
                 parent=self.root)
         except Exception as error:
             self._show_message("error", "내보내기 실패", str(error), parent=self.root)
+
+    def _open_document_from_row(self, event):
+        row = event.widget.identify_row(event.y)
+        if not row:
+            return
+        if row not in self.checked_ids:
+            self.checked_ids.add(row)
+            self._refresh_documents()
+        self._open_document()
 
     def _open_document(self):
         ids = self._selected_ids()

@@ -204,7 +204,8 @@ class DigitalVaultApp:
         self.check_tree = None
         self.meta_tree = None
         self.selection_label = None
-        self.checked_ids.clear()
+        if hasattr(self, "checked_ids"):
+            self.checked_ids.clear()
         for child in self.root.winfo_children():
             child.destroy()
 

@@ -140,6 +140,18 @@ def truncate_display(value, width):
     return shortened + "…"
 
 
+def unique_restore_name(name, used_names):
+    """이미 사용된 이름과 겹치지 않는 복원 파일명을 예약해 반환합니다."""
+    stem, suffix = Path(name).stem, Path(name).suffix
+    candidate = name
+    number = 1
+    while candidate.casefold() in used_names:
+        candidate = f"{stem} (복원 {number}){suffix}"
+        number += 1
+    used_names.add(candidate.casefold())
+    return candidate
+
+
 def center_display(value, width):
     value = str(value)
     padding = max(0, width - display_width(value))
@@ -1131,7 +1143,7 @@ class Vault:
         existing = {}
         for file_id, info in self.index.items():
             existing.setdefault(info.get("name", "").casefold(), (file_id, info))
-        seen_names, documents = {}, []
+        seen_source_names, reserved_names, documents = set(), set(existing), []
         for old_id, info in source_index.items():
             if (not isinstance(old_id, str) or len(old_id) != 24
                     or any(ch not in "0123456789abcdef" for ch in old_id)
@@ -1164,21 +1176,24 @@ class Vault:
                     f"저장된 형식({extension})이 일치하지 않습니다."
                 )
             normalized_name = name.casefold()
-            if normalized_name in seen_names:
-                raise invalid_document_name(
-                    "백업 안에 같은 이름의 문서가 중복되어 있습니다. "
-                    f"먼저 등록된 문서명: {seen_names[normalized_name]!r}"
-                )
-            seen_names[normalized_name] = name
+            duplicate_in_backup = normalized_name in seen_source_names
+            seen_source_names.add(normalized_name)
+            if duplicate_in_backup:
+                restore_name = unique_restore_name(name, reserved_names)
+                collision = None
+            else:
+                restore_name = name
+                reserved_names.add(normalized_name)
+                collision = existing.get(normalized_name)
             source_path = f"documents/{old_id}.bin"
             if source_path not in payloads:
                 raise ValueError(f"백업 문서 파일이 없습니다: {name}")
             aad = ("DigitalVault:document:v2:" + old_id).encode()
             plain = decrypt(source_key, payloads[source_path], aad)
-            collision = existing.get(name.casefold())
             documents.append({
-                "id": old_id, "name": name, "extension": extension.lower(),
-                "size": len(plain),
+                "id": old_id, "name": name, "restore_name": restore_name,
+                "duplicate_in_backup": duplicate_in_backup,
+                "extension": extension.lower(), "size": len(plain),
                 "collision_id": collision[0] if collision else None,
                 "collision_name": collision[1].get("name") if collision else None,
             })
@@ -1233,9 +1248,16 @@ class Vault:
             used_names = set(existing_by_name)
             staged_index = previous_index.copy()
 
+            seen_source_names = set()
             for old_id, info in source_index.items():
                 name = info["name"]
-                collision = existing_by_name.get(name.casefold())
+                normalized_name = name.casefold()
+                duplicate_in_backup = normalized_name in seen_source_names
+                seen_source_names.add(normalized_name)
+                collision = (
+                    existing_by_name.get(normalized_name)
+                    if not duplicate_in_backup else None
+                )
                 source_aad = ("DigitalVault:document:v2:" + old_id).encode()
                 plain = decrypt(source_key, payloads[f"documents/{old_id}.bin"], source_aad)
                 if collision:
@@ -1255,14 +1277,7 @@ class Vault:
                     replaced += 1
                     continue
 
-                new_name = name
-                if new_name.casefold() in used_names:
-                    stem, suffix = Path(name).stem, Path(name).suffix
-                    number = 1
-                    while f"{stem} (복원 {number}){suffix}".casefold() in used_names:
-                        number += 1
-                    new_name = f"{stem} (복원 {number}){suffix}"
-                used_names.add(new_name.casefold())
+                new_name = unique_restore_name(name, used_names)
                 new_id = secrets.token_hex(12)
                 while new_id in staged_index:
                     new_id = secrets.token_hex(12)

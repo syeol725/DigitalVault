@@ -181,6 +181,14 @@ def center_display(value, width):
     return " " * left + value + " " * (padding - left)
 
 
+def pad_display(value, width, align="left"):
+    value = str(value)
+    padding = max(0, width - display_width(value))
+    if align == "right":
+        return " " * padding + value
+    return value + " " * padding
+
+
 def show_main_menu():
     width = 72
     inner = width - 4
@@ -624,10 +632,12 @@ class Vault:
         size_width = 16
         table_width = 4 + 2 + name_width + 2 + extension_width + 2 + size_width
 
-        print("\n" + "===== 저장된 문서 목록 =====".center(table_width))
+        print("\n" + center_display("===== 저장된 문서 목록 =====", table_width))
         print(
-            f"{'번호':>4}  {'파일명':<{name_width}}  "
-            f"{'형식':<{extension_width}}  {'암호화 크기':>{size_width}}"
+            f"{pad_display('번호', 4, 'right')}  "
+            f"{pad_display('파일명', name_width)}  "
+            f"{pad_display('형식', extension_width)}  "
+            f"{pad_display('암호화 크기', size_width, 'right')}"
         )
         print("-" * table_width)
 
@@ -641,13 +651,16 @@ class Vault:
                 while shortened and display_width(shortened + "...") > name_width:
                     shortened = shortened[:-1]
                 name = shortened + "..."
+            size_text = f"{size:,} B"
             print(
-                f"{number:>4}  {name:<{name_width}}  "
-                f"{info['extension']:<{extension_width}}  {size:>{size_width - 2},} B"
+                f"{pad_display(number, 4, 'right')}  "
+                f"{pad_display(name, name_width)}  "
+                f"{pad_display(info['extension'], extension_width)}  "
+                f"{pad_display(size_text, size_width, 'right')}"
             )
 
         print("-" * table_width)
-        print(f"총 문서: {len(items)}개".rjust(table_width))
+        print(center_display(f"총 문서: {len(items)}개", table_width))
 
     def choose_id(self):
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())

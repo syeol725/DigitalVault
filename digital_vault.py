@@ -22,12 +22,13 @@ from pathlib import Path
 from tkinter import Tk, filedialog
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 
 EXTENSIONS = {".pdf", ".docx", ".txt", ".pptx", ".xlsx", ".jpg", ".jpeg", ".png"}
 MAX_TRIES = 5
 LOCK_SECONDS = 60
 FORMAT_VERSION = 2
-AUTO_BACKUP_RETENTION_DAYS = 7
+AUTO_BACKUP_RETENTION_COUNT = 5
 AUTO_BACKUP_FOLDER_NAME = "DigitalVault_Backups"
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
@@ -1080,30 +1081,39 @@ class Vault:
         self.log_event("backup_created")
         return len(files)
 
-    def cleanup_automatic_backups(self, retention_days=AUTO_BACKUP_RETENTION_DAYS, now=None):
-        """보관 기간이 지난 앱 생성 자동 백업만 안전하게 정리합니다."""
-        if not isinstance(retention_days, int) or retention_days < 1:
-            raise ValueError("자동 백업 보관 기간은 1일 이상이어야 합니다.")
+    def cleanup_automatic_backups(self, retention_days=None, now=None,
+                                  max_backups=AUTO_BACKUP_RETENTION_COUNT):
+        """앱 생성 자동 백업 중 최신 max_backups개만 남기고 오래된 파일을 정리합니다."""
+        if not isinstance(max_backups, int) or max_backups < 1:
+            raise ValueError("자동 백업 보관 개수는 1개 이상이어야 합니다.")
         backup_dir = self.folder.parent / AUTO_BACKUP_FOLDER_NAME / self.folder.name
         if not backup_dir.is_dir():
             return 0
-        current_time = time.time() if now is None else float(now)
-        cutoff = current_time - retention_days * 24 * 60 * 60
-        deleted = 0
         pattern = re.compile(r"auto-\d{8}-\d{6}(?:-\d+)?\.zip")
+        candidates = []
         for candidate in backup_dir.iterdir():
             if not pattern.fullmatch(candidate.name) or candidate.is_symlink():
                 continue
             try:
-                if candidate.is_file() and candidate.stat().st_mtime < cutoff:
-                    candidate.unlink()
-                    deleted += 1
+                if candidate.is_file():
+                    stat = candidate.stat()
+                    candidates.append((stat.st_mtime_ns, candidate.name, candidate))
+            except FileNotFoundError:
+                continue
+
+        # 파일명은 같은 초에 생성된 백업의 순서를 보조적으로 구분합니다.
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        deleted = 0
+        for _mtime, _name, candidate in candidates[max_backups:]:
+            try:
+                candidate.unlink()
+                deleted += 1
             except FileNotFoundError:
                 continue
         return deleted
 
-    def create_automatic_backup(self, retention_days=AUTO_BACKUP_RETENTION_DAYS):
-        """금고와 분리된 폴더에 자동 백업을 만들고 보관 기간을 적용합니다."""
+    def create_automatic_backup(self, retention_days=None):
+        """금고와 분리된 폴더에 자동 백업을 만들고 최신 5개만 보관합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 자동 백업을 만들 수 있습니다.")
         backup_dir = self.folder.parent / AUTO_BACKUP_FOLDER_NAME / self.folder.name
@@ -1115,7 +1125,7 @@ class Vault:
             destination = backup_dir / f"auto-{stamp}-{suffix}.zip"
             suffix += 1
         self.create_backup(destination)
-        deleted = self.cleanup_automatic_backups(retention_days=retention_days)
+        deleted = self.cleanup_automatic_backups()
         return {"path": destination, "deleted": deleted}
 
     def inspect_backup(self, archive_path, backup_password):
@@ -1157,10 +1167,13 @@ class Vault:
             raise ValueError("지원하지 않는 백업 금고 버전입니다.")
         source_salt = base64.b64decode(source_meta["salt"], validate=True)
         source_wrapped = base64.b64decode(source_meta["wrapped_key"], validate=True)
-        source_key = decrypt(
-            derive_key(backup_password, source_salt, source_meta.get("kdf")),
-            source_wrapped, WRAP_AAD
-        )
+        try:
+            source_key = decrypt(
+                derive_key(backup_password, source_salt, source_meta.get("kdf")),
+                source_wrapped, WRAP_AAD
+            )
+        except InvalidTag as error:
+            raise ValueError("백업 당시 금고 비밀번호가 올바르지 않습니다.") from error
         if len(source_key) != 32:
             raise ValueError("백업 금고 키가 올바르지 않습니다.")
         source_index = json.loads(

@@ -744,8 +744,11 @@ def main():
                 vault.change_password(old, new)
             elif choice == "7":
                 answer = input("마스터 키를 재발급하고 모든 문서를 재암호화할까요? (y/n): ").strip().lower()
-                if answer == "y": vault.rotate_master_key()
-                else: print("마스터 키 재발급을 취소했습니다.")
+                if answer == "y":
+                    current = masked_password("현재 비밀번호: ")
+                    vault.rotate_master_key(current)
+                else:
+                    print("마스터 키 재발급을 취소했습니다.")
             else:
                 print("메뉴 번호를 다시 선택하세요.")
                 continue

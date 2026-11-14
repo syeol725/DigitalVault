@@ -104,7 +104,7 @@ def timed_input(prompt, timeout):
         nonlocal last_rendered
         remaining = max(0, int(deadline - time.monotonic() + 0.999))
         line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
-        sys.stdout.write("\\r" + line + " " * max(0, last_rendered - len(line)))
+        sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
         sys.stdout.flush()
         last_rendered = len(line)
 

@@ -209,16 +209,18 @@ class DigitalVaultApp:
         self.password_var = tk.StringVar()
         password_entry_box = tk.Frame(
             card, bg=c["surface"], highlightthickness=1,
-            highlightbackground=c["line"], highlightcolor=c["accent"]
+            highlightbackground=c["line"], highlightcolor=c["accent"],
+            height=48
         )
         password_entry_box.pack(fill="x", pady=(8, 18))
+        password_entry_box.pack_propagate(False)
         entry = tk.Entry(
             password_entry_box, textvariable=self.password_var, show="●",
             relief="flat", bd=0, highlightthickness=0,
             bg=c["surface"], fg=c["text"], insertbackground=c["text"],
             font=("Malgun Gothic", 11)
         )
-        entry.pack(fill="both", expand=True, padx=10, ipady=9)
+        entry.pack(fill="x", expand=True, padx=10)
         entry.bind("<Return>", lambda _e: self._authenticate())
 
         ttk.Button(
@@ -250,8 +252,11 @@ class DigitalVaultApp:
     def _authenticate(self):
         folder_text = self.folder_var.get().strip()
         password = self.password_var.get()
-        if not folder_text or not password:
-            self._show_message("warning", "입력 확인", "금고 위치와 비밀번호를 입력하세요.", parent=self.root)
+        if not folder_text:
+            self._show_message("warning", "입력 확인", "금고 저장 위치를 입력하세요.", parent=self.root)
+            return
+        if not password.strip():
+            self._show_message("warning", "입력 확인", "비밀번호를 입력하세요.", parent=self.root)
             return
         try:
             vault = Vault(Path(folder_text).expanduser())
@@ -602,13 +607,25 @@ class DigitalVaultApp:
         actions.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
 
+        value = tk.StringVar(value=initial or "")
+        validation = tk.Label(
+            card, text="", bg="#FFFFFF", fg="#C0392B",
+            font=("Malgun Gothic", 8), anchor="w"
+        )
+
         def submit():
+            if show and not value.get().strip():
+                validation.configure(
+                    text="비밀번호를 입력하세요." if "비밀번호" in prompt_text else "내용을 입력하세요."
+                )
+                validation.pack(side="bottom", anchor="w", pady=(6, 0))
+                entry.focus_set()
+                return
             result["value"] = value.get()
             window.destroy()
 
         ttk.Button(actions, text="확인", style="Accent.TButton", command=submit).pack(side="right")
 
-        value = tk.StringVar(value=initial or "")
         input_entry_box = tk.Frame(
             card, bg="#FFFFFF", highlightthickness=1,
             highlightbackground="#D8DEE8", highlightcolor="#315ECA"
@@ -1084,7 +1101,7 @@ class DigitalVaultApp:
         note.pack(side="bottom", anchor="w", pady=(12, 8))
 
         table_frame = tk.Frame(card, bg="#FFFFFF")
-        table_frame.pack(fill="both", expand=True)
+        table_frame.pack(fill="both", expand=True, padx=14)
         columns = ("name", "extension", "size", "state", "action")
         tree = ttk.Treeview(
             table_frame, columns=columns, show="headings",
@@ -1103,8 +1120,10 @@ class DigitalVaultApp:
                         stretch=(column == "name"))
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
-        tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        # 메인 저장 문서 목록의 카드 내부 하단 여백(14px)과 동일하게 맞춥니다.
+        # 표 자체 높이를 줄여 마지막 행 아래의 내부 빈 공간이 과도해지지 않도록 합니다.
+        tree.pack(side="left", fill="both", expand=True, pady=(0, 14))
+        scroll.pack(side="right", fill="y", pady=(0, 14))
 
         for doc in preview["documents"]:
             collision = bool(doc["collision_id"])

@@ -889,8 +889,12 @@ class DigitalVaultApp:
         window.title("백업 복원 미리보기")
         window.configure(bg="#F5F7FB")
         window.transient(self.root)
-        window.geometry("900x620")
-        window.minsize(760, 500)
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        window_width = min(1000, max(680, screen_width - 80))
+        window_height = min(720, max(480, screen_height - 100))
+        window.geometry(f"{window_width}x{window_height}")
+        window.minsize(min(680, screen_width - 40), min(480, screen_height - 60))
 
         card = tk.Frame(window, bg="#FFFFFF", padx=22, pady=18)
         card.pack(fill="both", expand=True, padx=14, pady=14)
@@ -904,6 +908,19 @@ class DigitalVaultApp:
         tk.Label(card, text=summary, bg="#FFFFFF", fg="#667085",
                  font=("Malgun Gothic", 9), justify="left", wraplength=820
                  ).pack(anchor="w", pady=(8, 14))
+
+        # 하단 안내와 실행 버튼을 목록보다 먼저 배치해 항상 보이도록 합니다.
+        actions = tk.Frame(card, bg="#FFFFFF")
+        actions.pack(side="bottom", fill="x", pady=(10, 0))
+        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
+        note = tk.Label(
+            card,
+            text="적용 방법: 충돌 문서는 '충돌 처리' 칸을 더블클릭해 유지 또는 교체를 선택한 뒤, "
+                 "'복원 적용'을 누르세요. 신규 문서는 자동으로 추가됩니다. 적용 전 현재 금고는 자동 백업됩니다.",
+            bg="#FFFFFF", fg="#475467", font=("Malgun Gothic", 9),
+            wraplength=900, justify="left", anchor="w"
+        )
+        note.pack(side="bottom", fill="x", pady=(12, 4))
 
         table_frame = tk.Frame(card, bg="#FFFFFF")
         table_frame.pack(fill="both", expand=True)
@@ -946,15 +963,6 @@ class DigitalVaultApp:
             tree.item(iid, values=values)
         tree.bind("<Double-1>", toggle_choice)
 
-        note = tk.Label(card,
-            text="※ 백업 문서는 암호화 해제 검증까지 완료된 경우에만 표시됩니다. 병합 전 현재 금고를 자동 백업합니다.",
-            bg="#FFFFFF", fg="#667085", font=("Malgun Gothic", 8),
-            wraplength=820, justify="left")
-        note.pack(anchor="w", pady=(12, 8))
-
-        actions = tk.Frame(card, bg="#FFFFFF")
-        actions.pack(fill="x")
-        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
         def apply_merge():
             choices = {}
             for iid, doc in source_by_iid.items():
@@ -971,7 +979,7 @@ class DigitalVaultApp:
                 return
             window.destroy()
             self._apply_backup_merge(archive, password, choices)
-        ttk.Button(actions, text="복원 진행", style="Accent.TButton",
+        ttk.Button(actions, text="복원 적용", style="Accent.TButton",
                    command=apply_merge).pack(side="right")
         window.grab_set()
         window.focus_set()

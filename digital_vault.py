@@ -888,10 +888,10 @@ class Vault:
         print(f"검사 문서: {len(index)}개 / 이상 항목: {len(failures)}개")
         return not failures
 
-    def create_backup(self, destination):
+    def create_backup(self, destination, overwrite=False):
         destination = Path(destination).expanduser()
-        if destination.exists():
-            raise FileExistsError("기존 백업 파일을 덮어쓰지 않습니다.")
+        if destination.exists() and not overwrite:
+            raise FileExistsError("같은 이름의 백업본이 이미 있습니다.")
         # 백업에는 복원에 필요한 금고 메타데이터, 암호화 인덱스,
         # 암호화된 문서만 포함합니다. 보안 이벤트 로그는 별도 운영 기록이므로 제외합니다.
         files = [self.meta_file, self.index_file] + sorted(self.docs.glob("*.bin"))
@@ -1217,8 +1217,21 @@ def main():
                 finally:
                     if root is not None:
                         root.destroy()
+                if destination and Path(destination).exists():
+                    answer = read_input(
+                        "같은 이름의 백업본이 있습니다. 덮어쓸까요? (y/n): "
+                    ).strip().lower()
+                    if answer != "y":
+                        print("금고 백업을 취소했습니다.")
+                        destination = ""
+
                 if destination:
-                    print(f"백업 완료: {vault.create_backup(destination)}개 파일")
+                    try:
+                        overwrite = Path(destination).exists()
+                        count = vault.create_backup(destination, overwrite=overwrite)
+                        print(f"백업 완료: {count}개 파일")
+                    except Exception as error:
+                        print(f"금고 백업 중 오류가 발생했습니다: {error}")
                 else:
                     print("금고 백업을 취소했습니다.")
             elif choice == "L":

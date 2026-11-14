@@ -115,8 +115,13 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(reopened.login("updated-password-456"))
             self.assertEqual(len(reopened.index), 1)
 
-            reopened.rotate_master_key("updated-password-456", recovery_key)
+            new_recovery_key = reopened.rotate_master_key("updated-password-456")
             self.assertNotEqual(reopened.key, original_key)
+            self.assertIsNotNone(new_recovery_key)
+            with self.assertRaises(Exception):
+                reopened.recover_with_key(
+                    recovery_key, "old-recovery-key-must-fail-123"
+                )
 
             new_session = Vault(root / "vault")
             self.assertTrue(new_session.login("updated-password-456"))
@@ -135,7 +140,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertIn("document_added", audit_output.getvalue())
             self.assertIn("master_key_rotated", audit_output.getvalue())
             self.assertTrue(new_session.recover_with_key(
-                recovery_key, "recovered-after-rotation-987"
+                new_recovery_key, "recovered-after-rotation-987"
             ))
             after_recovery = Vault(root / "vault")
             self.assertTrue(after_recovery.login("recovered-after-rotation-987"))

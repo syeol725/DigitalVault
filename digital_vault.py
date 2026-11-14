@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -26,6 +27,8 @@ EXTENSIONS = {".pdf", ".docx", ".txt", ".pptx", ".xlsx", ".jpg", ".jpeg", ".png"
 MAX_TRIES = 5
 LOCK_SECONDS = 60
 FORMAT_VERSION = 2
+AUTO_BACKUP_RETENTION_DAYS = 7
+AUTO_BACKUP_FOLDER_NAME = "DigitalVault_Backups"
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
 WRAP_AAD = b"DigitalVault:master-key:v2"
@@ -1076,6 +1079,44 @@ class Vault:
         atomic_write(destination, buffer.getvalue())
         self.log_event("backup_created")
         return len(files)
+
+    def cleanup_automatic_backups(self, retention_days=AUTO_BACKUP_RETENTION_DAYS, now=None):
+        """보관 기간이 지난 앱 생성 자동 백업만 안전하게 정리합니다."""
+        if not isinstance(retention_days, int) or retention_days < 1:
+            raise ValueError("자동 백업 보관 기간은 1일 이상이어야 합니다.")
+        backup_dir = self.folder.parent / AUTO_BACKUP_FOLDER_NAME / self.folder.name
+        if not backup_dir.is_dir():
+            return 0
+        current_time = time.time() if now is None else float(now)
+        cutoff = current_time - retention_days * 24 * 60 * 60
+        deleted = 0
+        pattern = re.compile(r"auto-\\d{8}-\\d{6}(?:-\\d+)?\\.zip")
+        for candidate in backup_dir.iterdir():
+            if not pattern.fullmatch(candidate.name) or candidate.is_symlink():
+                continue
+            try:
+                if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+                    deleted += 1
+            except FileNotFoundError:
+                continue
+        return deleted
+
+    def create_automatic_backup(self, retention_days=AUTO_BACKUP_RETENTION_DAYS):
+        """금고와 분리된 폴더에 자동 백업을 만들고 보관 기간을 적용합니다."""
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 자동 백업을 만들 수 있습니다.")
+        backup_dir = self.folder.parent / AUTO_BACKUP_FOLDER_NAME / self.folder.name
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destination = backup_dir / f"auto-{stamp}.zip"
+        suffix = 1
+        while destination.exists():
+            destination = backup_dir / f"auto-{stamp}-{suffix}.zip"
+            suffix += 1
+        self.create_backup(destination)
+        deleted = self.cleanup_automatic_backups(retention_days=retention_days)
+        return {"path": destination, "deleted": deleted}
 
     def inspect_backup(self, archive_path, backup_password):
         """백업 전체를 검증·복호화하고 현재 금고와의 문서명 충돌을 미리 계산합니다."""

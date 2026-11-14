@@ -391,6 +391,88 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                 self.assertIn(expected_reason, message)
                 self.assertIn(repr(invalid_name), message)
 
+    def test_backup_preview_allows_duplicate_names_and_proposes_unique_restore_names(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            password = "source-duplicate-password-123"
+            source.create(password)
+
+            for index in range(3):
+                document = root / f"duplicate-{index}.xlsx"
+                document.write_text(f"document {index}", encoding="utf-8")
+                source.add_document(document)
+                source.index[next(reversed(source.index))]["name"] = "배당금 계산.xlsx"
+                source.save_index()
+
+            backup = root / "duplicate-names.zip"
+            source.create_backup(backup)
+            target = Vault(root / "target")
+            target.create("target-duplicate-password-123")
+
+            preview = target.inspect_backup(backup, password)
+            self.assertEqual(preview["document_count"], 3)
+            self.assertEqual(preview["collision_count"], 0)
+            self.assertEqual(
+                [doc["restore_name"] for doc in preview["documents"]],
+                [
+                    "배당금 계산.xlsx",
+                    "배당금 계산 (복원 1).xlsx",
+                    "배당금 계산 (복원 2).xlsx",
+                ],
+            )
+            self.assertEqual(
+                sum(doc["duplicate_in_backup"] for doc in preview["documents"]), 2
+            )
+
+    def test_backup_merge_restores_duplicate_names_without_overwriting_documents(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            password = "source-duplicate-merge-password-123"
+            source.create(password)
+            expected_contents = []
+            for index in range(3):
+                document = root / f"duplicate-{index}.xlsx"
+                content = f"unique document content {index}"
+                document.write_text(content, encoding="utf-8")
+                expected_contents.append(content.encode("utf-8"))
+                source.add_document(document)
+                source.index[next(reversed(source.index))]["name"] = "배당금 계산.xlsx"
+                source.save_index()
+
+            backup = root / "duplicate-merge.zip"
+            source.create_backup(backup)
+            target = Vault(root / "target")
+            target.create("target-duplicate-merge-password-123")
+
+            target.merge_backup(backup, password)
+            self.assertEqual(len(target.index), 3)
+            self.assertEqual(
+                {info["name"] for info in target.index.values()},
+                {
+                    "배당금 계산.xlsx",
+                    "배당금 계산 (복원 1).xlsx",
+                    "배당금 계산 (복원 2).xlsx",
+                },
+            )
+            restored_contents = []
+            for file_id in target.index:
+                aad = ("DigitalVault:document:v2:" + file_id).encode()
+                restored_contents.append(
+                    decrypt(
+                        target.key,
+                        (target.docs / (file_id + ".bin")).read_bytes(),
+                        aad,
+                    )
+                )
+            self.assertEqual(set(restored_contents), set(expected_contents))
+            self.assertTrue(target.integrity_check())
+
     def test_backup_merge_conflict_keep_and_replace(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

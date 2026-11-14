@@ -754,14 +754,18 @@ class DigitalVaultApp:
             self._show_message("error", "백업 불러오기 실패", str(error), parent=self.root)
 
     def _integrity_check(self):
-        result, output = self._capture(self.vault.integrity_check)
-        self._text_window("무결성 검사 결과", output)
-        if result:
-            self._show_message("info", "검사 완료", "모든 문서의 무결성 검사가 정상적으로 완료되었습니다.",
-                                parent=self.root)
-        else:
-            self._show_message("warning", "확인 필요", "일부 항목에서 문제가 발견되었습니다. 결과를 확인하세요.",
-                                   parent=self.root)
+        try:
+            result, output = self._capture(self.vault.integrity_check)
+            if result:
+                summary = "[검사 완료] 모든 문서의 무결성 검사가 정상적으로 완료되었습니다."
+            else:
+                summary = "[확인 필요] 일부 항목에서 문제가 발견되었습니다."
+            report = f"{summary}\n\n{output or '검사 결과가 없습니다.'}"
+        except Exception as error:
+            report = f"[검사 실패] 무결성 검사를 완료하지 못했습니다.\n\n{error}"
+
+        # 결과 창 하나에 상태와 상세 내역을 함께 표시해 별도 안내창이 중복으로 뜨지 않게 합니다.
+        self._text_window("무결성 검사 결과", report)
 
     def _vault_info(self):
         total = sum((self.vault.docs / (key + ".bin")).stat().st_size

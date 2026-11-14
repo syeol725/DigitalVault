@@ -433,25 +433,44 @@ class DigitalVaultApp:
         return result["value"]
 
     def _tool_dialog(self, title, actions):
+        """도구 메뉴의 제목과 버튼 문구에 맞춰 창 크기를 조절합니다."""
         window = tk.Toplevel(self.root)
         window.title(title)
         window.configure(bg="#F5F7FB")
         window.transient(self.root)
         window.resizable(False, False)
+
+        title_font = tkfont.Font(family="Malgun Gothic", size=16, weight="bold")
+        button_font = tkfont.Font(family="Malgun Gothic", size=10)
+        longest_label = max(
+            [title_font.measure(str(title))]
+            + [button_font.measure(str(label)) for label, _command in actions]
+            + [button_font.measure("닫기")]
+        )
+        screen_w = window.winfo_screenwidth()
+        screen_h = window.winfo_screenheight()
+        width = min(max(380, longest_label + 88), max(320, screen_w - 48))
+        desired_height = 154 + len(actions) * 52
+        height = min(desired_height, max(220, screen_h - 72))
+
         body = tk.Frame(window, bg="#FFFFFF", padx=24, pady=22,
                         highlightthickness=1, highlightbackground="#E5EAF2")
         body.pack(fill="both", expand=True, padx=14, pady=14)
         tk.Label(body, text=title, bg="#FFFFFF", fg="#202938",
-                 font=("Malgun Gothic", 16, "bold")).pack(anchor="w", pady=(0, 16))
+                 font=title_font).pack(anchor="w", pady=(0, 16))
         for label, command in actions:
-            ttk.Button(body, text=label, command=lambda fn=command, w=window: (w.destroy(), fn()),
-                       style="Accent.TButton").pack(fill="x", pady=4)
-        ttk.Button(body, text="닫기", command=window.destroy).pack(fill="x", pady=(12, 0))
-        window.update_idletasks()
-        width, height = 360, 150 + len(actions) * 54
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
-        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
-        window.geometry(f"{width}x{height}+{max(0,x)}+{max(0,y)}")
+            ttk.Button(
+                body, text=label,
+                command=lambda fn=command, w=window: (w.destroy(), fn()),
+                style="Accent.TButton"
+            ).pack(fill="x", pady=4)
+        ttk.Button(body, text="닫기", command=window.destroy).pack(
+            fill="x", pady=(12, 0)
+        )
+
+        x = max(12, (screen_w - width) // 2)
+        y = max(12, (screen_h - height) // 2)
+        window.geometry(f"{width}x{height}+{x}+{y}")
         window.grab_set()
 
     def _stat_card(self, parent, title, value):

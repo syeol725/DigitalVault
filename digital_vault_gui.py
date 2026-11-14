@@ -254,7 +254,6 @@ class DigitalVaultApp:
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self._toggle_tree_selection)
-        self.tree.bind("<Double-1>", self._open_document_from_double_click)
         self._refresh_documents()
 
     def _dialog_window(self, title, width=560, height=260):
@@ -530,14 +529,6 @@ class DigitalVaultApp:
         else:
             self.tree.selection_add(file_id)
         self.tree.focus(file_id)
-        return "break"
-
-    def _open_document_from_double_click(self, event):
-        file_id = self.tree.identify_row(event.y)
-        if file_id:
-            self.tree.selection_set(file_id)
-            self.tree.focus(file_id)
-            self._open_document()
         return "break"
 
     def _selected_ids(self):

@@ -286,7 +286,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             vault.create("csv-export-password-123")
             vault.log_event("login_success")
             with (vault.folder / "security.log").open("a", encoding="ascii") as stream:
-                stream.write("not-valid-base64!\\n")
+                stream.write("not-valid-base64!\n")
 
             destination = root / "security-log.csv"
             count = vault.export_security_log(destination)

@@ -174,6 +174,8 @@ class DigitalVaultApp:
                 return
             confirm = self._ask_string("새 비밀번호 확인", "새 비밀번호를 다시 입력하세요:",
                                              show="●", parent=self.root)
+            if confirm is None:
+                return
             if confirm != new_password:
                 self._show_message("error", "비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
                 return

@@ -253,7 +253,8 @@ class DigitalVaultApp:
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self.tree.bind("<Double-1>", lambda _e: self._open_document())
+        self.tree.bind("<Button-1>", self._toggle_document_selection)
+        self.tree.bind("<Double-1>", self._open_document_double_click)
         self._refresh_documents()
 
     def _dialog_window(self, title, width=560, height=260):
@@ -433,7 +434,7 @@ class DigitalVaultApp:
         return result["value"]
 
     def _tool_dialog(self, title, actions):
-        """도구 메뉴의 제목과 버튼 문구에 맞춰 창 크기를 조절합니다."""
+        """실제 위젯의 요청 크기로 창을 계산하고 닫기 버튼을 하단에 고정합니다."""
         window = tk.Toplevel(self.root)
         window.title(title)
         window.configure(bg="#F5F7FB")
@@ -441,36 +442,41 @@ class DigitalVaultApp:
         window.resizable(False, False)
 
         title_font = tkfont.Font(family="Malgun Gothic", size=16, weight="bold")
-        button_font = tkfont.Font(family="Malgun Gothic", size=10)
-        longest_label = max(
-            [title_font.measure(str(title))]
-            + [button_font.measure(str(label)) for label, _command in actions]
-            + [button_font.measure("닫기")]
+        body = tk.Frame(
+            window, bg="#FFFFFF", padx=24, pady=22,
+            highlightthickness=1, highlightbackground="#E5EAF2",
         )
-        screen_w = window.winfo_screenwidth()
-        screen_h = window.winfo_screenheight()
-        width = min(max(380, longest_label + 88), max(320, screen_w - 48))
-        desired_height = 154 + len(actions) * 52
-        height = min(desired_height, max(220, screen_h - 72))
-
-        body = tk.Frame(window, bg="#FFFFFF", padx=24, pady=22,
-                        highlightthickness=1, highlightbackground="#E5EAF2")
         body.pack(fill="both", expand=True, padx=14, pady=14)
-        tk.Label(body, text=title, bg="#FFFFFF", fg="#202938",
-                 font=title_font).pack(anchor="w", pady=(0, 16))
+
+        # 닫기 버튼을 먼저 하단에 배치해 높이가 제한되는 환경에서도 가려지지 않게 합니다.
+        close_button = ttk.Button(body, text="닫기", command=window.destroy)
+        close_button.pack(side="bottom", fill="x", pady=(12, 0))
+
+        tk.Label(
+            body, text=title, bg="#FFFFFF", fg="#202938",
+            font=title_font,
+        ).pack(anchor="w", pady=(0, 16))
+
         for label, command in actions:
             ttk.Button(
-                body, text=label,
+                body,
+                text=label,
                 command=lambda fn=command, w=window: (w.destroy(), fn()),
-                style="Accent.TButton"
+                style="Accent.TButton",
             ).pack(fill="x", pady=4)
-        ttk.Button(body, text="닫기", command=window.destroy).pack(
-            fill="x", pady=(12, 0)
-        )
 
+        window.update_idletasks()
+        screen_w = window.winfo_screenwidth()
+        screen_h = window.winfo_screenheight()
+        requested_w = window.winfo_reqwidth()
+        requested_h = window.winfo_reqheight()
+
+        width = min(max(400, requested_w), max(320, screen_w - 48))
+        height = min(max(230, requested_h), max(220, screen_h - 72))
         x = max(12, (screen_w - width) // 2)
         y = max(12, (screen_h - height) // 2)
         window.geometry(f"{width}x{height}+{x}+{y}")
+        window.minsize(min(width, requested_w), min(height, requested_h))
         window.grab_set()
 
     def _stat_card(self, parent, title, value):
@@ -511,12 +517,45 @@ class DigitalVaultApp:
             return f"{size / 1024:.1f} KB"
         return f"{size / (1024 ** 2):.2f} MB"
 
+    def _toggle_document_selection(self, event):
+        """Ctrl/Shift 없이 행을 클릭할 때마다 선택 상태를 전환합니다."""
+        region = self.tree.identify_region(event.x, event.y)
+        if region not in ("cell", "tree"):
+            return "break"
+
+        file_id = self.tree.identify_row(event.y)
+        if not file_id:
+            self.tree.selection_remove(self.tree.selection())
+            return "break"
+
+        selected = set(self.tree.selection())
+        if file_id in selected:
+            selected.remove(file_id)
+        else:
+            selected.add(file_id)
+
+        self.tree.selection_set(
+            [item for item in self.tree.get_children("") if item in selected]
+        )
+        self.tree.focus(file_id)
+        return "break"
+
+    def _open_document_double_click(self, event):
+        """더블 클릭은 해당 문서를 바로 열되 기존 다중 선택과 혼동하지 않게 합니다."""
+        file_id = self.tree.identify_row(event.y)
+        if file_id:
+            self.tree.selection_set(file_id)
+            self.tree.focus(file_id)
+            self._open_document()
+        return "break"
+
     def _selected_ids(self):
-        selected = self.tree.selection()
+        selected = set(self.tree.selection())
         if not selected:
             self._show_message("info", "문서 선택", "먼저 문서를 선택하세요.", parent=self.root)
             return []
-        return list(selected)
+        # 화면에 표시된 순서대로 작업 큐를 구성합니다.
+        return [item for item in self.tree.get_children("") if item in selected]
 
     def _add_document(self):
         paths = filedialog.askopenfilenames(
@@ -547,66 +586,111 @@ class DigitalVaultApp:
         ids = self._selected_ids()
         if not ids:
             return
-        file_id = ids[0]
-        info = self.vault.index[file_id]
-        ext = info["extension"]
-        destination = filedialog.asksaveasfilename(
-            title="문서를 저장할 위치 선택", initialfile=info["name"],
-            defaultextension=ext, confirmoverwrite=True,
-            filetypes=[(f"원본 형식 (*{ext})", f"*{ext}"), ("모든 파일", "*.*")],
-            parent=self.root)
-        if not destination:
-            return
-        target = Path(destination)
-        try:
-            data = decrypt(self.vault.key,
-                (self.vault.docs / (file_id + ".bin")).read_bytes(),
-                ("DigitalVault:document:v2:" + file_id).encode())
-            atomic_write(target, data)
-            self._show_message("info", "내보내기 완료",
-                "문서를 내보냈습니다.\n내보낸 파일은 금고 외부에 암호화되지 않은 상태로 저장됩니다.",
-                parent=self.root)
-        except Exception as error:
-            self._show_message("error", "내보내기 실패", str(error), parent=self.root)
+
+        exported = []
+        failed = []
+        cancelled = False
+        total = len(ids)
+
+        for position, file_id in enumerate(ids, start=1):
+            info = self.vault.index[file_id]
+            ext = info["extension"]
+            destination = filedialog.asksaveasfilename(
+                title=f"문서 내보내기 ({position}/{total}) - 저장 위치 선택",
+                initialfile=info["name"],
+                defaultextension=ext,
+                confirmoverwrite=True,
+                filetypes=[(f"원본 형식 (*{ext})", f"*{ext}"), ("모든 파일", "*.*")],
+                parent=self.root,
+            )
+            if not destination:
+                cancelled = True
+                break
+
+            try:
+                data = decrypt(
+                    self.vault.key,
+                    (self.vault.docs / (file_id + ".bin")).read_bytes(),
+                    ("DigitalVault:document:v2:" + file_id).encode(),
+                )
+                atomic_write(Path(destination), data)
+                exported.append(info["name"])
+            except Exception as error:
+                failed.append(f"{info['name']}: {error}")
+                self._show_message(
+                    "error", "내보내기 실패",
+                    f"{position}/{total}번째 문서 내보내기에 실패했습니다.\n"
+                    f"파일명: {info['name']}\n\n{error}\n\n"
+                    "확인을 누르면 다음 문서로 진행합니다.",
+                    parent=self.root,
+                )
+
+        message = f"문서 {len(exported)}개를 내보냈습니다."
+        if cancelled:
+            message += f"\n\n{len(exported)}/{total}개 처리 후 내보내기를 취소했습니다."
+        if failed:
+            message += "\n\n실패한 문서:\n" + "\n".join(failed)
+        if exported:
+            message += "\n\n내보낸 파일은 금고 외부에 암호화되지 않은 상태로 저장됩니다."
+        self._show_message("info", "내보내기 결과", message, parent=self.root)
 
     def _open_document(self):
         ids = self._selected_ids()
         if not ids:
             return
-        file_id = ids[0]
-        temp_dir = None
-        try:
+
+        total = len(ids)
+        for position, file_id in enumerate(ids, start=1):
+            temp_dir = None
             info = self.vault.index[file_id]
-            data = decrypt(self.vault.key,
-                (self.vault.docs / (file_id + ".bin")).read_bytes(),
-                ("DigitalVault:document:v2:" + file_id).encode())
-            temp_dir = Path(tempfile.mkdtemp(prefix=self.vault.temp_prefix))
             try:
-                os.chmod(temp_dir, 0o700)
-            except OSError:
-                pass
-            temp_file = temp_dir / Path(info["name"]).name
-            temp_file.write_bytes(data)
-            try:
-                os.chmod(temp_file, 0o600)
-            except OSError:
-                pass
-            if os.name == "nt":
-                os.startfile(str(temp_file))
-            else:
-                import subprocess
-                if sys.platform == "darwin":
-                    subprocess.Popen(["open", str(temp_file)])
+                data = decrypt(
+                    self.vault.key,
+                    (self.vault.docs / (file_id + ".bin")).read_bytes(),
+                    ("DigitalVault:document:v2:" + file_id).encode(),
+                )
+                temp_dir = Path(tempfile.mkdtemp(prefix=self.vault.temp_prefix))
+                try:
+                    os.chmod(temp_dir, 0o700)
+                except OSError:
+                    pass
+
+                temp_file = temp_dir / Path(info["name"]).name
+                temp_file.write_bytes(data)
+                try:
+                    os.chmod(temp_file, 0o600)
+                except OSError:
+                    pass
+
+                if os.name == "nt":
+                    os.startfile(str(temp_file))
                 else:
-                    subprocess.Popen(["xdg-open", str(temp_file)])
-            self._show_message("info", "문서 열기",
-                "문서를 외부 프로그램에서 열었습니다.\n확인을 누르면 임시 복호화 파일을 정리합니다.\n"
-                "문서를 사용 중이라면 먼저 닫아 주세요.", parent=self.root)
-        except Exception as error:
-            self._show_message("error", "문서 열기 실패", str(error), parent=self.root)
-        finally:
-            if temp_dir is not None:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                    import subprocess
+                    if sys.platform == "darwin":
+                        subprocess.Popen(["open", str(temp_file)])
+                    else:
+                        subprocess.Popen(["xdg-open", str(temp_file)])
+
+                self._show_message(
+                    "info", "문서 열기",
+                    f"선택한 문서 {total}개 중 {position}번째 문서를 열었습니다.\n"
+                    f"파일명: {info['name']}\n\n"
+                    "외부 프로그램에서 문서를 확인한 뒤 확인을 누르면 다음 문서를 엽니다.\n"
+                    "문서를 사용 중이라면 다음으로 넘어가기 전에 먼저 닫아 주세요.\n"
+                    "임시 복호화 파일은 확인 후 정리됩니다.",
+                    parent=self.root,
+                )
+            except Exception as error:
+                self._show_message(
+                    "error", "문서 열기 실패",
+                    f"선택한 문서 {total}개 중 {position}번째 문서를 열지 못했습니다.\n"
+                    f"파일명: {info['name']}\n\n{error}\n\n"
+                    "확인을 누르면 다음 문서로 진행합니다.",
+                    parent=self.root,
+                )
+            finally:
+                if temp_dir is not None:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _delete_document(self):
         ids = self._selected_ids()
@@ -627,22 +711,50 @@ class DigitalVaultApp:
         ids = self._selected_ids()
         if not ids:
             return
+        if len(ids) > 1:
+            self._show_message(
+                "info", "이름 변경",
+                "이름 변경은 한 번에 문서 1개만 할 수 있습니다.\n"
+                "이름을 바꿀 문서 하나만 선택하세요.",
+                parent=self.root,
+            )
+            return
+
         file_id = ids[0]
         old = self.vault.index[file_id]["name"]
-        new = self._ask_string("이름 변경", "새 파일명을 입력하세요.",
-                                     initialvalue=old, parent=self.root)
+        new = self._ask_string(
+            "이름 변경", "새 파일명을 입력하세요.",
+            initialvalue=old, parent=self.root,
+        )
+        if new is None:
+            return
+        new = new.strip()
         if not new:
             return
-        if Path(new).name != new:
-            self._show_message("error", "이름 확인", "파일명만 입력할 수 있습니다.", parent=self.root)
+        if Path(new).name != new or new in (".", ".."):
+            self._show_message(
+                "error", "이름 확인", "파일명만 입력할 수 있습니다.",
+                parent=self.root,
+            )
             return
+
         ext = self.vault.index[file_id]["extension"]
-        if Path(new).suffix.lower() != ext:
+        if Path(new).suffix.lower() != ext.lower():
             new = Path(new).stem + ext
-        if any(key != file_id and value["name"].casefold() == new.casefold()
-               for key, value in self.vault.index.items()):
-            self._show_message("error", "이름 중복", "같은 이름의 문서가 이미 있습니다.", parent=self.root)
+
+        duplicate = any(
+            key != file_id and value["name"].casefold() == new.casefold()
+            for key, value in self.vault.index.items()
+        )
+        if duplicate:
+            self._show_message(
+                "warning", "파일명 중복",
+                f"'{new}'은(는) 이미 금고에 저장된 파일명입니다.\n"
+                "같은 이름으로는 변경할 수 없습니다. 다른 파일명을 입력하세요.",
+                parent=self.root,
+            )
             return
+
         self.vault.index[file_id]["name"] = new
         self.vault.save_index()
         self.vault.log_event("document_renamed")

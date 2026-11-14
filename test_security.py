@@ -29,10 +29,11 @@ class DigitalVaultSecurityTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             show_main_menu(3)
         rendered = output.getvalue()
-        self.assertIn("현재 금고: 3개 문서", rendered)
-        self.assertIn("A  문서 추가", rendered)
-        self.assertIn("N  금고 정보", rendered)
-        self.assertIn("0  금고 잠금 및 종료", rendered)
+        self.assertIn("DigitalVault  |  문서 3개", rendered)
+        self.assertIn("A 추가", rendered)
+        self.assertIn("N 금고 정보", rendered)
+        self.assertIn("0 잠금 및 종료", rendered)
+        self.assertNotIn("=" * 20, rendered)
         self.assertNotIn("자동 잠금", rendered)
         self.assertNotIn("남은 시간", rendered)
         self.assertNotIn("선택:", rendered)
@@ -66,8 +67,10 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertLess(rendered.index("Alpha 보고서.docx"), rendered.index("zeta.pdf"))
             self.assertIn("DOCX", rendered)
             self.assertIn("PDF", rendered)
-            self.assertIn("총 문서: 2개", rendered)
-            self.assertIn("총 암호화 크기: 12 B", rendered)
+            self.assertIn("총 2개  |  12 B", rendered)
+            self.assertIn("번호", rendered)
+            self.assertIn("파일명", rendered)
+            self.assertIn("암호화 크기", rendered)
 
     def test_long_document_name_is_truncated_by_display_width(self):
         from digital_vault import display_width, truncate_display

@@ -964,7 +964,7 @@ class Vault:
         if legacy:
             print(f"[부분 검증] {len(records)}건의 구형 기록은 암호 인증만 확인했습니다. 신규 기록부터 연결 검증이 적용됩니다.")
         else:
-            print(f"[정상] 보안 기록 {len(records)}건의 암호 인증 및 연결 무결성이 확인되었습니다.")
+            print("[정상] 보안 기록의 무결성이 확인되었습니다.")
         return True
 
     def log_event(self, event):

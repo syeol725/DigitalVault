@@ -556,14 +556,23 @@ class Vault:
             print("총 0개  |  0 B")
             return
 
-        number_width = max(2, len(str(len(items))))
+        number_width = max(
+            display_width("번호"),
+            len(str(len(items)))
+        )
         name_width = min(
             36,
-            max(8, max(display_width(info["name"]) for _, info in items))
+            max(
+                display_width("파일명"),
+                max(display_width(info["name"]) for _, info in items)
+            )
         )
         extension_width = max(
-            4,
-            max(len(info["extension"].lstrip(".")) for _, info in items)
+            display_width("형식"),
+            max(
+                display_width(info["extension"].lstrip(".").upper())
+                for _, info in items
+            )
         )
         sizes = []
         total_size = 0
@@ -573,8 +582,8 @@ class Vault:
             sizes.append(size)
             total_size += size
         size_width = max(
-            len("암호화 크기"),
-            max(len(f"{size:,} B") for size in sizes)
+            display_width("암호화 크기"),
+            max(display_width(f"{size:,} B") for size in sizes)
         )
         table_width = (
             number_width + 2 + name_width + 2

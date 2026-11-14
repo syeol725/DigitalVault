@@ -841,7 +841,7 @@ class DigitalVaultApp:
             self.vault.create_backup(target, overwrite=True)
             self._show_message(
                 "info", "백업 완료",
-                f"백업을 만들었습니다.\n저장된 문서: {document_count}개",
+                f"백업을 만들었습니다.\n포함 문서: {document_count}개",
                 parent=self.root
             )
         except Exception as error:

@@ -8,6 +8,33 @@ from digital_vault import Vault, derive_key, encrypt, decrypt
 
 
 class DigitalVaultSecurityTests(unittest.TestCase):
+    def test_menu_uses_letters_and_normalizes_case(self):
+        from digital_vault import normalize_menu_choice
+        self.assertEqual(normalize_menu_choice(" a "), "A")
+        self.assertEqual(normalize_menu_choice("N"), "N")
+        self.assertEqual(normalize_menu_choice("14"), "14")
+
+    def test_continue_prompt_has_bounded_decisions(self):
+        from digital_vault import continue_decision
+        for answer in ("y", "Y", "yes", "예", "ㅇ"):
+            self.assertEqual(continue_decision(answer), "continue")
+        for answer in ("n", "N", "no", "아니오", "아니요", "ㄴ"):
+            self.assertEqual(continue_decision(answer), "exit")
+        for answer in ("", "maybe", "계속", "1"):
+            self.assertEqual(continue_decision(answer), "invalid")
+
+    def test_main_menu_displays_a_to_n(self):
+        from digital_vault import show_main_menu
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            show_main_menu(299, 3)
+        rendered = output.getvalue()
+        self.assertIn("자동 잠금까지 남은 시간: 04:59", rendered)
+        self.assertIn("A  문서 추가", rendered)
+        self.assertIn("N  금고 정보", rendered)
+        self.assertIn("0  금고 잠금 및 종료", rendered)
+        self.assertNotIn("선택:", rendered)
+
     def test_authenticated_encryption_detects_tampering(self):
         key = derive_key("test-password-123", b"0123456789abcdef")
         sealed = encrypt(key, b"private payload", b"test-context")

@@ -218,7 +218,7 @@ class DigitalVaultApp:
             bg=c["surface"], fg=c["text"], insertbackground=c["text"],
             font=("Malgun Gothic", 11)
         )
-        entry.pack(fill="both", expand=True, padx=10, ipady=9)
+        entry.pack(fill="both", expand=True, padx=10, ipady=7, pady=(0, 4))
         entry.bind("<Return>", lambda _e: self._authenticate())
 
         ttk.Button(

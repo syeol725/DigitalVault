@@ -91,6 +91,8 @@ class DigitalVaultApp:
         entry.bind("<Return>", lambda _e: self._authenticate())
         ttk.Button(card, text="금고 열기", style="Accent.TButton",
                    command=self._authenticate).pack(fill="x")
+        ttk.Button(card, text="복구 키로 비밀번호 재설정",
+                   command=self._recover_password).pack(fill="x", pady=(8, 0))
         tk.Label(card, text="처음 사용하는 폴더라면 새 금고가 생성됩니다.",
                  bg="#FFFFFF", fg="#8993A3", font=("Malgun Gothic", 8)).pack(anchor="w", pady=(15, 0))
         entry.focus_set()
@@ -143,6 +145,39 @@ class DigitalVaultApp:
             self._dashboard()
         except Exception as error:
             messagebox.showerror("금고 열기 실패", str(error), parent=self.root)
+
+    def _recover_password(self):
+        folder_text = self.folder_var.get().strip()
+        if not folder_text:
+            messagebox.showwarning("금고 위치", "먼저 금고 폴더를 선택하세요.", parent=self.root)
+            return
+        try:
+            vault = Vault(Path(folder_text).expanduser())
+            if not vault.exists:
+                messagebox.showerror("복구 실패", "선택한 위치에 금고가 없습니다.", parent=self.root)
+                return
+            recovery = simpledialog.askstring("복구 키", "보관한 복구 키를 입력하세요:",
+                                              show="●", parent=self.root)
+            if recovery is None:
+                return
+            new_password = simpledialog.askstring("새 비밀번호", "새 비밀번호 (8자 이상):",
+                                                  show="●", parent=self.root)
+            if new_password is None:
+                return
+            if len(new_password) < 8:
+                messagebox.showerror("비밀번호 확인", "비밀번호는 8자 이상이어야 합니다.", parent=self.root)
+                return
+            confirm = simpledialog.askstring("새 비밀번호 확인", "새 비밀번호를 다시 입력하세요:",
+                                             show="●", parent=self.root)
+            if confirm != new_password:
+                messagebox.showerror("비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
+                return
+            vault.recover_with_key(recovery, new_password)
+            self.vault = vault
+            self._dashboard()
+            messagebox.showinfo("복구 완료", "새 비밀번호로 금고를 복구했습니다.", parent=self.root)
+        except Exception as error:
+            messagebox.showerror("복구 실패", str(error), parent=self.root)
 
     def _clear(self):
         for child in self.root.winfo_children():

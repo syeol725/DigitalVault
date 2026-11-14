@@ -261,66 +261,66 @@ def menu_timer_line(remaining_seconds):
 
 
 def update_menu_timer(remaining_seconds):
-    """메뉴 전체를 다시 그리지 않고 타이머 행만 갱신합니다."""
+    """Windows 콘솔에서 메뉴 전체가 아닌 타이머 행만 갱신합니다."""
     if not getattr(sys.stdout, "isatty", lambda: False)() or os.name != "nt":
         return
 
     line = menu_timer_line(remaining_seconds)
 
-        # Windows 콘솔 API를 사용해 현재 입력 커서를 보존한 채 타이머 행만 덮어씁니다.
-        import ctypes
-        from ctypes import wintypes
+    # Windows 콘솔 API로 현재 입력 커서를 보존하면서 타이머 행만 덮어씁니다.
+    import ctypes
+    from ctypes import wintypes
 
-        class COORD(ctypes.Structure):
-            _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+    class COORD(ctypes.Structure):
+        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
 
-        class SMALL_RECT(ctypes.Structure):
-            _fields_ = [
-                ("Left", wintypes.SHORT), ("Top", wintypes.SHORT),
-                ("Right", wintypes.SHORT), ("Bottom", wintypes.SHORT),
-            ]
-
-        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", COORD),
-                ("dwCursorPosition", COORD),
-                ("wAttributes", wintypes.WORD),
-                ("srWindow", SMALL_RECT),
-                ("dwMaximumWindowSize", COORD),
-            ]
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
-        kernel32.GetStdHandle.restype = wintypes.HANDLE
-        kernel32.GetConsoleScreenBufferInfo.argtypes = [
-            wintypes.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)
+    class SMALL_RECT(ctypes.Structure):
+        _fields_ = [
+            ("Left", wintypes.SHORT), ("Top", wintypes.SHORT),
+            ("Right", wintypes.SHORT), ("Bottom", wintypes.SHORT),
         ]
-        kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
-        kernel32.SetConsoleCursorPosition.argtypes = [wintypes.HANDLE, COORD]
-        kernel32.SetConsoleCursorPosition.restype = wintypes.BOOL
-        kernel32.WriteConsoleW.argtypes = [
-            wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
-            ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+
+    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", COORD),
+            ("dwCursorPosition", COORD),
+            ("wAttributes", wintypes.WORD),
+            ("srWindow", SMALL_RECT),
+            ("dwMaximumWindowSize", COORD),
         ]
-        kernel32.WriteConsoleW.restype = wintypes.BOOL
 
-        handle = kernel32.GetStdHandle(0xFFFFFFF5)  # STD_OUTPUT_HANDLE
-        info = CONSOLE_SCREEN_BUFFER_INFO()
-        if not handle or not kernel32.GetConsoleScreenBufferInfo(
-            handle, ctypes.byref(info)
-        ):
-            return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+    kernel32.GetStdHandle.restype = wintypes.HANDLE
+    kernel32.GetConsoleScreenBufferInfo.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)
+    ]
+    kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
+    kernel32.SetConsoleCursorPosition.argtypes = [wintypes.HANDLE, COORD]
+    kernel32.SetConsoleCursorPosition.restype = wintypes.BOOL
+    kernel32.WriteConsoleW.argtypes = [
+        wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+    ]
+    kernel32.WriteConsoleW.restype = wintypes.BOOL
 
-        original = info.dwCursorPosition
-        timer_position = COORD(0, max(0, original.Y - 16))
-        written = wintypes.DWORD()
-        try:
-            if kernel32.SetConsoleCursorPosition(handle, timer_position):
-                kernel32.WriteConsoleW(
-                    handle, ctypes.c_wchar_p(line), len(line), ctypes.byref(written), None
-                )
-        finally:
-            kernel32.SetConsoleCursorPosition(handle, original)
+    handle = kernel32.GetStdHandle(0xFFFFFFF5)  # STD_OUTPUT_HANDLE
+    info = CONSOLE_SCREEN_BUFFER_INFO()
+    if not handle or not kernel32.GetConsoleScreenBufferInfo(
+        handle, ctypes.byref(info)
+    ):
+        return
+
+    original = info.dwCursorPosition
+    timer_position = COORD(0, max(0, original.Y - 16))
+    written = wintypes.DWORD()
+    try:
+        if kernel32.SetConsoleCursorPosition(handle, timer_position):
+            kernel32.WriteConsoleW(
+                handle, ctypes.c_wchar_p(line), len(line), ctypes.byref(written), None
+            )
+    finally:
+        kernel32.SetConsoleCursorPosition(handle, original)
 
 
 def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):

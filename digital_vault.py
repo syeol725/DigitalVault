@@ -455,6 +455,8 @@ class Vault:
         staged_docs.mkdir(parents=True)
         old_index, old_meta = stage / "index.old", stage / "vault.old"
         staged_index, staged_meta = stage / "index.new", stage / "vault.new"
+        audit_path = self.folder / "security.log"
+        old_audit, staged_audit = stage / "security.old", stage / "security.new"
         try:
             for file_id in self.index:
                 aad = ("DigitalVault:document:v2:" + file_id).encode()
@@ -472,12 +474,24 @@ class Vault:
             if self.index_file.exists():
                 shutil.copy2(self.index_file, old_index)
             shutil.copy2(self.meta_file, old_meta)
+            if audit_path.exists():
+                converted = []
+                for line in audit_path.read_text(encoding="ascii").splitlines():
+                    record = decrypt(self.key, base64.b64decode(line, validate=True),
+                                     b"DigitalVault:audit:v1")
+                    converted.append(base64.b64encode(
+                        encrypt(new_key, record, b"DigitalVault:audit:v1")
+                    ).decode("ascii"))
+                atomic_write(staged_audit, ("\n".join(converted) + "\n").encode("ascii"))
+                shutil.copy2(audit_path, old_audit)
 
             self.docs.rename(backup_docs)
             try:
                 staged_docs.rename(self.docs)
                 os.replace(staged_index, self.index_file)
                 os.replace(staged_meta, self.meta_file)
+                if staged_audit.exists():
+                    os.replace(staged_audit, audit_path)
             except Exception:
                 if self.docs.exists():
                     shutil.rmtree(self.docs, ignore_errors=True)
@@ -487,6 +501,8 @@ class Vault:
                     os.replace(old_index, self.index_file)
                 if old_meta.exists():
                     os.replace(old_meta, self.meta_file)
+                if old_audit.exists():
+                    os.replace(old_audit, audit_path)
                 raise
 
             shutil.rmtree(backup_docs, ignore_errors=True)

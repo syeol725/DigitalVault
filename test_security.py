@@ -189,6 +189,30 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(reopened.login("target-password-456"))
             self.assertEqual(len(reopened.index), 2)
 
+    def test_backup_contains_only_required_vault_data(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("backup-password-123")
+            source = root / "backup.txt"
+            source.write_text("backup payload", encoding="utf-8")
+            vault.add_document(source)
+            (vault.folder / "security.log").write_text("audit record", encoding="ascii")
+
+            backup = root / "vault-backup.zip"
+            vault.create_backup(backup)
+
+            with zipfile.ZipFile(backup, "r") as archive:
+                names = set(archive.namelist())
+            self.assertIn("vault.json", names)
+            self.assertIn("index.bin", names)
+            self.assertIn("backup_manifest.json", names)
+            self.assertIn("documents/" + next(iter(vault.index)) + ".bin", names)
+            self.assertNotIn("security.log", names)
+            self.assertFalse(any(name.lower().endswith(("readme.md", ".exe", ".py"))
+                                 for name in names))
+
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

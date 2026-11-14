@@ -252,7 +252,7 @@ def masked_password(prompt, timeout=None):
                     raise KeyboardInterrupt
                 if raw == bytes([4]):
                     raise EOFError
-                if raw in (bytes([13]), bytes([10])):
+                if raw in (bytes([127]), bytes([8])):
                     if chars:
                         chars.pop()
                         sys.stdout.write(chr(8) + " " + chr(8))

@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+      - feature/digitalvault-2.0
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:

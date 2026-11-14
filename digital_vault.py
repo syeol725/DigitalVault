@@ -1117,7 +1117,7 @@ def main():
                 old = masked_password("현재 비밀번호: ")
                 new = prompt_new_password()
                 vault.change_password(old, new)
-            elif choice == "9":
+            elif choice == "8":
                 answer = read_input("마스터 키를 재발급할까요? (y/n): ").strip().lower()
                 if answer == "y":
                     current = masked_password("현재 비밀번호: ")

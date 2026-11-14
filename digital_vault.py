@@ -182,27 +182,35 @@ def default_vault_directory():
     return app_directory() / "DigitalVaultData"
 
 
-def masked_password(prompt):
-    """비밀번호 입력 시 실제 문자는 숨기고 입력한 글자 수만큼 *를 표시합니다."""
+def masked_password(prompt, timeout=None):
+    """실제 문자를 숨기고 별표로 표시합니다. timeout 초과 시 None을 반환합니다."""
     print(prompt, end="", flush=True)
+    deadline = None if timeout is None else time.monotonic() + timeout
 
     if os.name == "nt":
         import msvcrt
-
         chars = []
         while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                print()
+                print("입력 대기 시간이 초과되어 금고를 잠급니다.")
+                return None
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
             char = msvcrt.getwch()
-            if char in ("\r", "\n"):
+            code = ord(char)
+            if code in (10, 13):
                 print()
                 return "".join(chars)
-            if char == "\003":
+            if code == 3:
                 raise KeyboardInterrupt
-            if char == "\b":
+            if code == 8:
                 if chars:
                     chars.pop()
-                    print("\b \b", end="", flush=True)
+                    print(chr(8) + " " + chr(8), end="", flush=True)
                 continue
-            if char in ("\x00", "\xe0"):
+            if code in (0, 224):
                 msvcrt.getwch()
                 continue
             if char.isprintable():
@@ -210,42 +218,58 @@ def masked_password(prompt):
                 print("*", end="", flush=True)
 
     if sys.stdin.isatty():
+        import codecs
+        import select
         import termios
         import tty
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         chars = []
+        decoder = codecs.getincrementaldecoder("utf-8")()
         try:
             tty.setcbreak(fd)
             input_settings = termios.tcgetattr(fd)
             input_settings[3] &= ~termios.ECHO
             termios.tcsetattr(fd, termios.TCSADRAIN, input_settings)
             while True:
-                char = sys.stdin.read(1)
-                if char in ("\r", "\n"):
-                    break
-                if char == "\x03":
+                wait = 0.1
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        print()
+                        print("입력 대기 시간이 초과되어 금고를 잠급니다.")
+                        return None
+                    wait = min(wait, remaining)
+                ready, _, _ = select.select([fd], [], [], wait)
+                if not ready:
+                    continue
+                raw = os.read(fd, 1)
+                if raw in (b"\\r", b"\\n"):
+                    print()
+                    return "".join(chars)
+                if raw == b"\\x03":
                     raise KeyboardInterrupt
-                if char == "\x04":
+                if raw == b"\\x04":
                     raise EOFError
-                if char in ("\x7f", "\b"):
+                if raw in (b"\\x7f", b"\\x08"):
                     if chars:
                         chars.pop()
-                        sys.stdout.write("\b \b")
+                        sys.stdout.write("\\b \\b")
                         sys.stdout.flush()
+                    decoder.reset()
                     continue
-                if char.isprintable():
+                char = decoder.decode(raw)
+                if char and char.isprintable():
                     chars.append(char)
                     sys.stdout.write("*")
                     sys.stdout.flush()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            print()
-        return "".join(chars)
 
+    if timeout is not None:
+        return getpass.getpass(prompt)
     return getpass.getpass(prompt)
-
 
 def prompt_new_password():
     while True:

@@ -26,7 +26,10 @@ class DigitalVaultApp:
         self.root.configure(bg="#F5F7FB")
         self.vault = None
         self.tree = None
+        self.check_tree = None
         self.meta_tree = None
+        self.checked_ids = set()
+        self.selection_label = None
         self._style()
         self._login_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
@@ -37,19 +40,24 @@ class DigitalVaultApp:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Treeview", rowheight=42, font=("Malgun Gothic", 10),
+        style.configure("Treeview", rowheight=46, font=("Malgun Gothic", 10),
                         background="#FFFFFF", fieldbackground="#FFFFFF",
                         foreground="#202938", borderwidth=0, relief="flat")
         style.configure("Treeview.Heading", font=("Malgun Gothic", 9, "bold"),
-                        background="#F2F5FA", foreground="#526078", relief="flat", padding=(12, 12))
-        style.map("Treeview", background=[("selected", "#E4ECFF")],
+                        background="#F3F6FB", foreground="#526078", relief="flat",
+                        padding=(13, 13), borderwidth=0)
+        style.map("Treeview", background=[("selected", "#E8F0FF")],
                   foreground=[("selected", "#173B83")])
-        style.configure("TButton", font=("Malgun Gothic", 9), padding=(14, 10),
+        style.configure("TButton", font=("Malgun Gothic", 9, "bold"), padding=(15, 10),
                         background="#FFFFFF", foreground="#344054", borderwidth=0, relief="flat")
-        style.map("TButton", background=[("active", "#EDF2FA"), ("pressed", "#E4EAF4")])
+        style.map("TButton", background=[("active", "#EDF2FA"), ("pressed", "#E4EAF4")],
+                  foreground=[("active", "#203A69")])
         style.configure("Accent.TButton", font=("Malgun Gothic", 9, "bold"),
-                        padding=(16, 11), background="#315ECA", foreground="#FFFFFF", borderwidth=0)
-        style.map("Accent.TButton", background=[("active", "#244DAA")])
+                        padding=(17, 11), background="#315ECA", foreground="#FFFFFF", borderwidth=0)
+        style.map("Accent.TButton", background=[("active", "#244DAA"), ("pressed", "#1F469E")])
+        style.configure("Quiet.TButton", font=("Malgun Gothic", 9, "bold"),
+                        padding=(13, 10), background="#EAF0FA", foreground="#315ECA", borderwidth=0)
+        style.map("Quiet.TButton", background=[("active", "#DDE7F7")])
         style.configure("TLabel", font=("Malgun Gothic", 10), background="#FFFFFF",
                         foreground="#202938")
         style.configure("Muted.TLabel", foreground="#738096", background="#FFFFFF")
@@ -187,7 +195,9 @@ class DigitalVaultApp:
     def _clear(self):
         # 이전 화면의 Treeview 위젯 참조가 남으면 재로그인 시 TclError가 발생한다.
         self.tree = None
+        self.check_tree = None
         self.meta_tree = None
+        self.selection_label = None
         for child in self.root.winfo_children():
             child.destroy()
 
@@ -234,27 +244,43 @@ class DigitalVaultApp:
 
         toolbar = tk.Frame(content, bg="#F5F7FB")
         toolbar.pack(fill="x", pady=(0, 12))
-        tk.Label(toolbar, text="저장된 파일", bg="#F5F7FB", fg="#202938",
-                 font=("Malgun Gothic", 12, "bold")).pack(side="left")
-        ttk.Button(toolbar, text="이름 변경", command=self._rename_document).pack(side="right", padx=(6, 0))
-        ttk.Button(toolbar, text="삭제", command=self._delete_document).pack(side="right", padx=(6, 0))
+        title_group = tk.Frame(toolbar, bg="#F5F7FB")
+        title_group.pack(side="left")
+        tk.Label(title_group, text="저장된 파일", bg="#F5F7FB", fg="#202938",
+                 font=("Malgun Gothic", 13, "bold")).pack(side="left")
+        self.selection_label = tk.Label(
+            title_group, text="선택 0개", bg="#E8EEF8", fg="#526783",
+            font=("Malgun Gothic", 8, "bold"), padx=10, pady=4
+        )
+        self.selection_label.pack(side="left", padx=(10, 0))
+        ttk.Button(toolbar, text="이름 변경", command=self._rename_document).pack(side="right", padx=(7, 0))
+        ttk.Button(toolbar, text="삭제", command=self._delete_document).pack(side="right", padx=(7, 0))
         ttk.Button(toolbar, text="열기", style="Accent.TButton",
                    command=self._open_document).pack(side="right")
 
-        table_card = tk.Frame(content, bg="#FFFFFF", padx=14, pady=14,
-                              highlightthickness=1, highlightbackground="#E6EAF0")
+        table_card = tk.Frame(content, bg="#FFFFFF", padx=10, pady=10,
+                              highlightthickness=1, highlightbackground="#E3E9F2")
         table_card.pack(fill="both", expand=True)
 
-        # 파일명과 나머지 열을 분리해 가로 스크롤이 파일명 영역에만 적용되게 합니다.
+        # 체크박스와 형식/용량은 고정하고 파일명 열에만 가로 스크롤을 적용합니다.
         table_body = tk.Frame(table_card, bg="#FFFFFF")
         table_body.pack(fill="both", expand=True)
+        check_panel = tk.Frame(table_body, bg="#FFFFFF")
+        check_panel.pack(side="left", fill="y")
         name_panel = tk.Frame(table_body, bg="#FFFFFF")
         name_panel.pack(side="left", fill="both", expand=True)
         meta_panel = tk.Frame(table_body, bg="#FFFFFF")
         meta_panel.pack(side="left", fill="y", expand=False)
 
+        self.check_tree = ttk.Treeview(
+            check_panel, columns=("check",), show="headings", selectmode="none"
+        )
+        self.check_tree.heading("check", text="선택", anchor="center")
+        self.check_tree.column("check", width=58, minwidth=58, anchor="center", stretch=False)
+        self.check_tree.pack(fill="y", expand=True)
+
         self.tree = ttk.Treeview(
-            name_panel, columns=("name",), show="headings", selectmode="extended"
+            name_panel, columns=("name",), show="headings", selectmode="none"
         )
         self.tree.heading("name", text="파일명", anchor="w")
         self.tree.column("name", width=520, minwidth=300, anchor="w", stretch=False)
@@ -275,12 +301,13 @@ class DigitalVaultApp:
         self.meta_tree.pack(side="left", fill="both", expand=True)
 
         def scroll_rows(*args):
+            self.check_tree.yview(*args)
             self.tree.yview(*args)
             self.meta_tree.yview(*args)
 
         scrollbar = ttk.Scrollbar(table_body, orient="vertical", command=scroll_rows)
         scrollbar.pack(side="right", fill="y")
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.check_tree.configure(yscrollcommand=scrollbar.set)
 
         def sync_mousewheel(event):
             if getattr(event, "num", None) == 4:
@@ -289,23 +316,28 @@ class DigitalVaultApp:
                 units = 1
             else:
                 units = -1 if event.delta > 0 else 1
-            self.tree.yview_scroll(units, "units")
-            self.meta_tree.yview_moveto(self.tree.yview()[0])
+            for widget in (self.check_tree, self.tree, self.meta_tree):
+                widget.yview_scroll(units, "units")
             return "break"
 
-        for widget in (self.tree, self.meta_tree):
+        for widget in (self.check_tree, self.tree, self.meta_tree):
             widget.bind("<MouseWheel>", sync_mousewheel)
             widget.bind("<Button-4>", sync_mousewheel)
             widget.bind("<Button-5>", sync_mousewheel)
             widget.bind("<Double-1>", lambda _e: self._open_document())
 
-        def select_from_metadata(event):
-            row = self.meta_tree.identify_row(event.y)
-            if row:
-                self.tree.selection_set(row)
-                self.tree.focus(row)
+        def toggle_checkbox(event):
+            region = self.check_tree.identify_region(event.x, event.y)
+            if region == "heading":
+                self._toggle_all_documents()
+                return "break"
+            if region == "cell" and self.check_tree.identify_column(event.x) == "#1":
+                row = self.check_tree.identify_row(event.y)
+                if row:
+                    self._toggle_document(row)
+                return "break"
 
-        self.meta_tree.bind("<Button-1>", select_from_metadata)
+        self.check_tree.bind("<Button-1>", toggle_checkbox)
         self._refresh_documents()
 
     def _dialog_window(self, title, width=560, height=260):
@@ -552,27 +584,42 @@ class DigitalVaultApp:
     def _refresh_documents(self):
         if not self.vault or self.tree is None:
             return
-        for widget in (self.tree, self.meta_tree):
+        documents = self._documents()
+        valid_ids = {file_id for file_id, _info in documents}
+        self.checked_ids.intersection_update(valid_ids)
+        for widget in (self.check_tree, self.tree, self.meta_tree):
             for item in widget.get_children():
                 widget.delete(item)
         total = 0
-        documents = self._documents()
         name_font = tkfont.Font(family="Malgun Gothic", size=10)
         longest_name = max(
             [520] + [name_font.measure(info["name"]) + 36 for _file_id, info in documents]
         )
         self.tree.column("name", width=longest_name, minwidth=300, stretch=False)
-        for file_id, info in documents:
+        for index, (file_id, info) in enumerate(documents):
             path = self.vault.docs / (file_id + ".bin")
             size = path.stat().st_size if path.exists() else 0
             total += size
-            self.tree.insert("", "end", iid=file_id, values=(info["name"],))
+            checked = file_id in self.checked_ids
+            checkbox_text = "☑" if checked else "☐"
+            row_tag = "checked" if checked else ("even" if index % 2 == 0 else "odd")
+            for widget in (self.check_tree, self.tree, self.meta_tree):
+                widget.tag_configure("checked", background="#EDF4FF", foreground="#244B91")
+                widget.tag_configure("even", background="#FFFFFF", foreground="#202938")
+                widget.tag_configure("odd", background="#FAFBFD", foreground="#202938")
+            self.check_tree.insert("", "end", iid=file_id, values=(checkbox_text,), tags=(row_tag,))
+            self.tree.insert("", "end", iid=file_id, values=(info["name"],), tags=(row_tag,))
             self.meta_tree.insert(
                 "", "end", iid=file_id,
-                values=(info["extension"].lstrip(".").upper(), self._format_size(size))
+                values=(info["extension"].lstrip(".").upper(), self._format_size(size)),
+                tags=(row_tag,)
             )
+        header_mark = "☑" if documents and len(self.checked_ids) == len(documents) else "☐"
+        self.check_tree.heading("check", text=header_mark, anchor="center")
         self.count_label.configure(text=f"{len(self.vault.index)}개")
         self.size_label.configure(text=self._format_size(total))
+        if self.selection_label:
+            self.selection_label.configure(text=f"선택 {len(self.checked_ids)}개")
 
     @staticmethod
     def _format_size(size):
@@ -582,13 +629,27 @@ class DigitalVaultApp:
             return f"{size / 1024:.1f} KB"
         return f"{size / (1024 ** 2):.2f} MB"
 
+    def _toggle_document(self, file_id):
+        if file_id in self.checked_ids:
+            self.checked_ids.remove(file_id)
+        else:
+            self.checked_ids.add(file_id)
+        self._refresh_documents()
+
+    def _toggle_all_documents(self):
+        all_ids = {file_id for file_id, _info in self._documents()}
+        if all_ids and self.checked_ids == all_ids:
+            self.checked_ids.clear()
+        else:
+            self.checked_ids = all_ids
+        self._refresh_documents()
+
     def _selected_ids(self):
-        selected = set(self.tree.selection())
-        if not selected:
-            self._show_message("info", "문서 선택", "먼저 문서를 선택하세요.", parent=self.root)
+        if not self.checked_ids:
+            self._show_message("info", "문서 선택", "체크박스로 문서를 먼저 선택하세요.", parent=self.root)
             return []
-        # 목록에 보이는 순서대로 대기열을 구성합니다.
-        return [item for item in self.tree.get_children() if item in selected]
+        # 체크된 문서를 목록에 표시된 순서대로 반환합니다.
+        return [item for item in self.tree.get_children() if item in self.checked_ids]
 
     def _add_document(self):
         paths = filedialog.askopenfilenames(
@@ -723,6 +784,14 @@ class DigitalVaultApp:
     def _rename_document(self):
         ids = self._selected_ids()
         if not ids:
+            return
+        if len(ids) > 1:
+            self._show_message(
+                "warning", "이름 변경 안내",
+                f"이름 변경은 한 번에 한 파일만 가능합니다.\n현재 {len(ids)}개 파일이 선택되어 있습니다.\n\n"
+                "이름을 바꿀 파일 하나만 체크한 뒤 다시 시도하세요.",
+                parent=self.root
+            )
             return
         file_id = ids[0]
         old = self.vault.index[file_id]["name"]

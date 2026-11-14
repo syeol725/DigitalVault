@@ -305,6 +305,36 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 vault.export_security_log(root / "locked.csv")
 
+    def test_automatic_backup_is_separate_and_expires_after_seven_days(self):
+        import os
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("auto-backup-password-123")
+            result = vault.create_automatic_backup()
+            backup_dir = root / "DigitalVault_Backups" / "vault"
+            self.assertEqual(result["path"].parent, backup_dir)
+            self.assertTrue(result["path"].is_file())
+            self.assertFalse((vault.folder / "DigitalVault_Backups").exists())
+
+            old_backup = backup_dir / "auto-20200101-000000.zip"
+            old_backup.write_bytes(b"old")
+            os.utime(old_backup, (time.time() - 8 * 86400,) * 2)
+            recent_backup = backup_dir / "auto-20200102-000000.zip"
+            recent_backup.write_bytes(b"recent")
+            os.utime(recent_backup, (time.time() - 6 * 86400,) * 2)
+            unrelated = backup_dir / "manual-export.zip"
+            unrelated.write_bytes(b"keep")
+            os.utime(unrelated, (time.time() - 30 * 86400,) * 2)
+
+            deleted = vault.cleanup_automatic_backups(retention_days=7)
+            self.assertEqual(deleted, 1)
+            self.assertFalse(old_backup.exists())
+            self.assertTrue(recent_backup.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(vault.integrity_check())
+
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

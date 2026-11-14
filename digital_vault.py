@@ -1302,14 +1302,18 @@ class Vault:
                 pass
             raise
         finally:
+            preserve_stage = False
             if "journal_path" in locals() and journal_path.exists():
                 try:
                     journal = json.loads(journal_path.read_text(encoding="utf-8"))
                     if journal.get("state") == "committed":
                         journal_path.unlink(missing_ok=True)
+                    else:
+                        preserve_stage = True
                 except Exception:
-                    pass
-            shutil.rmtree(staged_dir, ignore_errors=True)
+                    preserve_stage = True
+            if not preserve_stage:
+                shutil.rmtree(staged_dir, ignore_errors=True)
 
     @staticmethod
     def restore_backup(archive_path, destination):

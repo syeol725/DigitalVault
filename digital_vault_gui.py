@@ -770,7 +770,7 @@ class DigitalVaultApp:
         if len(ids) > 1:
             self._show_message(
                 "warning", "이름 변경 안내",
-                f"이름 변경은 한 번에 한 파일만 가능합니다.\\n현재 {len(ids)}개 파일이 선택되어 있습니다.\\n\\n"
+                f"이름 변경은 한 번에 한 파일만 가능합니다.\n현재 {len(ids)}개 파일이 선택되어 있습니다.\n\n"
                 "이름을 바꿀 파일 하나만 체크한 뒤 다시 시도하세요.",
                 parent=self.root
             )

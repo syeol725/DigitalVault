@@ -392,7 +392,7 @@ class Vault:
             except OSError:
                 pass
 
-    def rotate_master_key(self, password, recovery_key=None):
+    def rotate_master_key(self, password):
         """새 마스터 키로 재암호화하고 메타데이터까지 함께 교체합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 실행할 수 있습니다.")
@@ -415,20 +415,15 @@ class Vault:
             "salt": base64.b64encode(new_salt).decode("ascii"),
             "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
         }
+        new_recovery_key = None
         if meta.get("recovery_salt") and meta.get("recovery_wrapped_key"):
-            if not recovery_key:
-                raise ValueError("복구 키가 있어야 마스터 키 재발급 후에도 복구 기능을 유지할 수 있습니다.")
-            recovery_salt = base64.b64decode(meta["recovery_salt"], validate=True)
-            old_recovery_master = decrypt(
-                derive_key(recovery_key, recovery_salt),
-                base64.b64decode(meta["recovery_wrapped_key"], validate=True),
-                b"DigitalVault:recovery-key:v1"
-            )
-            if not secrets.compare_digest(old_recovery_master, self.key):
-                raise ValueError("복구 키가 올바르지 않습니다.")
-            new_meta["recovery_salt"] = meta["recovery_salt"]
+            new_recovery_key = secrets.token_urlsafe(32)
+            recovery_salt = secrets.token_bytes(16)
+            new_meta["recovery_salt"] = base64.b64encode(
+                recovery_salt
+            ).decode("ascii")
             new_meta["recovery_wrapped_key"] = base64.b64encode(
-                encrypt(derive_key(recovery_key, recovery_salt), new_key,
+                encrypt(derive_key(new_recovery_key, recovery_salt), new_key,
                         b"DigitalVault:recovery-key:v1")
             ).decode("ascii")
 
@@ -494,6 +489,8 @@ class Vault:
             print("마스터 키를 재발급하고 문서·인덱스·키 메타데이터를 갱신했습니다.")
         finally:
             shutil.rmtree(stage, ignore_errors=True)
+
+        return new_recovery_key
 
     def add_document(self, source=None):
         if not source:
@@ -771,6 +768,21 @@ class Vault:
         self.save_index()
         self.log_event("document_deleted")
         print(f"문서 {len(selected_ids)}개를 삭제했습니다.")
+
+    def verify_password(self, password):
+        """현재 금고의 비밀번호가 맞는지 확인합니다."""
+        try:
+            meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+            if meta.get("format_version") != FORMAT_VERSION:
+                return False
+            salt = base64.b64decode(meta["salt"], validate=True)
+            wrapped = base64.b64decode(meta["wrapped_key"], validate=True)
+            master = decrypt(
+                derive_key(password, salt, meta.get("kdf")), wrapped, WRAP_AAD
+            )
+            return len(master) == 32 and secrets.compare_digest(master, self.key)
+        except Exception:
+            return False
 
     def change_password(self, old_password, new_password):
         try:

@@ -26,8 +26,6 @@ LOCK_SECONDS = 60
 FORMAT_VERSION = 2
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
-IDLE_TIMEOUT_SECONDS = 300
-SESSION_DEADLINE = None
 WRAP_AAD = b"DigitalVault:master-key:v2"
 INDEX_AAD = b"DigitalVault:index:v2"
 
@@ -95,116 +93,9 @@ def decrypt(key, data, aad=None):
     return AESGCM(key).decrypt(data[:12], data[12:], aad)
 
 
-def start_session_timer():
-    global SESSION_DEADLINE
-    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-
-
-def remaining_session_seconds():
-    if SESSION_DEADLINE is None:
-        return IDLE_TIMEOUT_SECONDS
-    return max(0, int(SESSION_DEADLINE - time.monotonic() + 0.999))
-
-
-def timed_input(prompt, timeout, refresh=None):
-    """입력 대기 중 남은 자동 잠금 시간을 표시하고, 필요하면 화면을 갱신합니다."""
-    global SESSION_DEADLINE
-    chars = []
-    if SESSION_DEADLINE is None:
-        SESSION_DEADLINE = time.monotonic() + timeout
-    last_rendered = 0
-    last_refresh_remaining = remaining_session_seconds()
-    last_refresh_at = time.monotonic()
-
-    def render():
-        nonlocal last_rendered, last_refresh_remaining, last_refresh_at
-        remaining = remaining_session_seconds()
-        now = time.monotonic()
-        if refresh is not None and (
-            remaining != last_refresh_remaining or now - last_refresh_at >= 1.0
-        ):
-            refresh(remaining)
-            last_refresh_remaining = remaining
-            last_refresh_at = now
-            last_rendered = 0
-
-        if refresh is None:
-            line = prompt + "".join(chars)
-        else:
-            line = prompt + "".join(chars)
-
-        sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
-        sys.stdout.flush()
-        last_rendered = len(line)
-
-    if os.name == "nt":
-        import msvcrt
-        while remaining_session_seconds() > 0:
-            render()
-            if msvcrt.kbhit():
-                ch = msvcrt.getwch()
-                code = ord(ch)
-                if code in (10, 13):
-                    print()
-                    return "".join(chars)
-                if code == 3:
-                    raise KeyboardInterrupt
-                if code in (0, 224):
-                    msvcrt.getwch()
-                    continue
-                if code == 8:
-                    if chars:
-                        chars.pop()
-                elif ch.isprintable():
-                    chars.append(ch)
-                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-            else:
-                time.sleep(0.1)
-    else:
-        import select
-        import termios
-        import tty
-        if not sys.stdin.isatty():
-            return input(prompt)
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            while remaining_session_seconds() > 0:
-                render()
-                ready, _, _ = select.select(
-                    [sys.stdin], [], [], min(0.2, remaining_session_seconds())
-                )
-                if not ready:
-                    continue
-                ch = os.read(fd, 1).decode("utf-8", errors="ignore")
-                if not ch:
-                    continue
-                code = ord(ch)
-                if code in (10, 13):
-                    print()
-                    return "".join(chars)
-                if code in (8, 127):
-                    if chars:
-                        chars.pop()
-                elif code == 3:
-                    raise KeyboardInterrupt
-                elif ch.isprintable():
-                    chars.append(ch)
-                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-    print()
-    print("미사용 시간이 초과되어 금고를 잠급니다.")
-    return None
-
-
 def read_input(prompt):
-    value = timed_input(prompt, IDLE_TIMEOUT_SECONDS)
-    if value is None:
-        raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
-    return value
+    """시간 제한 없이 일반 입력을 받습니다."""
+    return input(prompt)
 
 
 def clear_console():
@@ -248,88 +139,12 @@ def pad_display(value, width, align="left"):
     return value + " " * padding
 
 
-def format_duration(seconds):
-    seconds = max(0, int(seconds))
-    return f"{seconds // 60:02d}:{seconds % 60:02d}"
-
-
-def menu_timer_line(remaining_seconds):
-    """메인 메뉴의 타이머 행을 고정된 표시 폭으로 만듭니다."""
-    return pad_display(
-        f"자동 잠금까지 남은 시간: {format_duration(remaining_seconds)}", 58
-    )
-
-
-def update_menu_timer(remaining_seconds):
-    """Windows 콘솔에서 메뉴 전체가 아닌 타이머 행만 갱신합니다."""
-    if not getattr(sys.stdout, "isatty", lambda: False)() or os.name != "nt":
-        return
-
-    line = menu_timer_line(remaining_seconds)
-
-    # Windows 콘솔 API로 현재 입력 커서를 보존하면서 타이머 행만 덮어씁니다.
-    import ctypes
-    from ctypes import wintypes
-
-    class COORD(ctypes.Structure):
-        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
-
-    class SMALL_RECT(ctypes.Structure):
-        _fields_ = [
-            ("Left", wintypes.SHORT), ("Top", wintypes.SHORT),
-            ("Right", wintypes.SHORT), ("Bottom", wintypes.SHORT),
-        ]
-
-    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", COORD),
-            ("dwCursorPosition", COORD),
-            ("wAttributes", wintypes.WORD),
-            ("srWindow", SMALL_RECT),
-            ("dwMaximumWindowSize", COORD),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
-    kernel32.GetStdHandle.restype = wintypes.HANDLE
-    kernel32.GetConsoleScreenBufferInfo.argtypes = [
-        wintypes.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)
-    ]
-    kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
-    kernel32.SetConsoleCursorPosition.argtypes = [wintypes.HANDLE, COORD]
-    kernel32.SetConsoleCursorPosition.restype = wintypes.BOOL
-    kernel32.WriteConsoleW.argtypes = [
-        wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
-    ]
-    kernel32.WriteConsoleW.restype = wintypes.BOOL
-
-    handle = kernel32.GetStdHandle(0xFFFFFFF5)  # STD_OUTPUT_HANDLE
-    info = CONSOLE_SCREEN_BUFFER_INFO()
-    if not handle or not kernel32.GetConsoleScreenBufferInfo(
-        handle, ctypes.byref(info)
-    ):
-        return
-
-    original = info.dwCursorPosition
-    timer_position = COORD(0, max(0, original.Y - 16))
-    written = wintypes.DWORD()
-    try:
-        if kernel32.SetConsoleCursorPosition(handle, timer_position):
-            kernel32.WriteConsoleW(
-                handle, ctypes.c_wchar_p(line), len(line), ctypes.byref(written), None
-            )
-    finally:
-        kernel32.SetConsoleCursorPosition(handle, original)
-
-
-def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):
+def show_main_menu(document_count=0):
     print()
     print("=" * 58)
     print("DigitalVault")
     print("=" * 58)
     print(f"현재 금고: {document_count}개 문서")
-    print(menu_timer_line(remaining_seconds))
     print("-" * 58)
     print("문서 관리")
     print("  A  문서 추가          B  문서 목록")
@@ -385,31 +200,15 @@ def default_vault_directory():
     return app_directory() / "DigitalVaultData"
 
 
-def masked_password(prompt, timeout=None):
-    """실제 문자를 숨기고 별표로 표시합니다. timeout 초과 시 None을 반환합니다."""
-    print(prompt, end="", flush=True)
-    global SESSION_DEADLINE
-    deadline = SESSION_DEADLINE if SESSION_DEADLINE is not None else (
-        None if timeout is None else time.monotonic() + timeout
-    )
-
+def masked_password(prompt):
+    """비밀번호 입력 문자를 화면에 표시하지 않습니다."""
     if os.name == "nt":
         import msvcrt
+
+        print(prompt, end="", flush=True)
         chars = []
         while True:
-            if deadline is not None and time.monotonic() >= deadline:
-                print()
-                print("입력 대기 시간이 초과되어 금고를 잠급니다.")
-                return None
-            if not msvcrt.kbhit():
-                time.sleep(0.05)
-                continue
             char = msvcrt.getwch()
-            if SESSION_DEADLINE is not None:
-                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-                deadline = SESSION_DEADLINE
-            elif timeout is not None:
-                deadline = time.monotonic() + timeout
             code = ord(char)
             if code in (10, 13):
                 print()
@@ -430,7 +229,6 @@ def masked_password(prompt, timeout=None):
 
     if sys.stdin.isatty():
         import codecs
-        import select
         import termios
         import tty
 
@@ -438,29 +236,14 @@ def masked_password(prompt, timeout=None):
         old_settings = termios.tcgetattr(fd)
         chars = []
         decoder = codecs.getincrementaldecoder("utf-8")()
+        print(prompt, end="", flush=True)
         try:
             tty.setcbreak(fd)
             input_settings = termios.tcgetattr(fd)
             input_settings[3] &= ~termios.ECHO
             termios.tcsetattr(fd, termios.TCSADRAIN, input_settings)
             while True:
-                wait = 0.1
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        print()
-                        print("입력 대기 시간이 초과되어 금고를 잠급니다.")
-                        return None
-                    wait = min(wait, remaining)
-                ready, _, _ = select.select([fd], [], [], wait)
-                if not ready:
-                    continue
                 raw = os.read(fd, 1)
-                if SESSION_DEADLINE is not None:
-                    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-                    deadline = SESSION_DEADLINE
-                elif timeout is not None:
-                    deadline = time.monotonic() + timeout
                 if raw in (bytes([13]), bytes([10])):
                     print()
                     return "".join(chars)
@@ -483,23 +266,17 @@ def masked_password(prompt, timeout=None):
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-    if timeout is not None:
-        return getpass.getpass(prompt)
     return getpass.getpass(prompt)
 
-def prompt_new_password(timeout=None):
-    while True:
-        password = masked_password("새 비밀번호: ", timeout)
-        if password is None:
-            raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
 
+def prompt_new_password():
+    while True:
+        password = masked_password("새 비밀번호: ")
         if len(password) < 8:
             print("비밀번호는 8자 이상이어야 합니다. 다시 입력하세요.")
             continue
 
-        confirm = masked_password("비밀번호 확인: ", timeout)
-        if confirm is None:
-            raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
+        confirm = masked_password("비밀번호 확인: ")
         if password != confirm:
             print("비밀번호가 일치하지 않습니다.")
             continue
@@ -1375,29 +1152,16 @@ def main():
         if vault.lock_status():
             return
 
-    start_session_timer()
     # 인증 과정의 출력(비밀번호 입력 안내 포함)을 지우고 메뉴 화면만 표시한다.
     clear_console()
     first_menu = True
     try:
         while vault.key is not None:
-            if remaining_session_seconds() <= 0:
-                vault.lock()
-                break
             if not first_menu:
                 clear_console()
             first_menu = False
-            show_main_menu(remaining_session_seconds(), len(vault.index))
-
-            def refresh_menu(remaining):
-                update_menu_timer(remaining)
-
-            choice = timed_input(
-                "선택: ", IDLE_TIMEOUT_SECONDS, refresh=refresh_menu
-            )
-            if choice is None:
-                vault.lock()
-                break
+            show_main_menu(len(vault.index))
+            choice = read_input("선택: ")
             choice = normalize_menu_choice(choice)
             if choice == "0":
                 vault.lock()
@@ -1474,11 +1238,7 @@ def main():
                         root.destroy()
 
                 if archive:
-                    backup_password = masked_password(
-                        "백업 당시 금고 비밀번호: ", timeout=IDLE_TIMEOUT_SECONDS
-                    )
-                    if backup_password is None:
-                        raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
+                    backup_password = masked_password("백업 당시 금고 비밀번호: ")
                     merged_count = vault.merge_backup(archive, backup_password)
                     print(f"백업 병합 완료: 문서 {merged_count}개 추가")
                     print(f"현재 금고 문서 수: {len(vault.index)}개")
@@ -1494,7 +1254,7 @@ def main():
                 continue
 
             answer = read_input(
-                "\n작업을 계속하시겠습니까? (Y/N): "
+                "\n작업을 계속하시겠습니까? (y/n): "
             )
             decision = continue_decision(answer)
             if decision == "continue":
@@ -1504,12 +1264,9 @@ def main():
                 vault.lock()
                 return
 
-            print("Y 또는 N을 입력하세요. 메인 메뉴로 돌아갑니다.")
+            print("y 또는 n을 입력하세요. 메인 메뉴로 돌아갑니다.")
             continue
 
-    except TimeoutError as error:
-        print(f"\n{error}")
-        vault.lock()
     except (KeyboardInterrupt, EOFError):
         print("\n프로그램을 종료합니다.")
     except Exception as error:

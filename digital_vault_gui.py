@@ -209,16 +209,18 @@ class DigitalVaultApp:
         self.password_var = tk.StringVar()
         password_entry_box = tk.Frame(
             card, bg=c["surface"], highlightthickness=1,
-            highlightbackground=c["line"], highlightcolor=c["accent"]
+            highlightbackground=c["line"], highlightcolor=c["accent"],
+            height=48
         )
         password_entry_box.pack(fill="x", pady=(8, 18))
+        password_entry_box.pack_propagate(False)
         entry = tk.Entry(
             password_entry_box, textvariable=self.password_var, show="●",
             relief="flat", bd=0, highlightthickness=0,
             bg=c["surface"], fg=c["text"], insertbackground=c["text"],
             font=("Malgun Gothic", 11)
         )
-        entry.pack(fill="both", expand=True, padx=10, ipady=7, pady=(0, 4))
+        entry.pack(fill="x", expand=True, padx=10)
         entry.bind("<Return>", lambda _e: self._authenticate())
 
         ttk.Button(

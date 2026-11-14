@@ -7,6 +7,7 @@ import sys
 import shutil
 import tempfile
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, ttk
 
@@ -255,40 +256,56 @@ class DigitalVaultApp:
         self.tree.bind("<Double-1>", lambda _e: self._open_document())
         self._refresh_documents()
 
-    def _dialog_window(self, title, width=520, height=240):
+    def _dialog_window(self, title, width=560, height=260):
         window = tk.Toplevel(self.root)
         window.title(title)
         window.configure(bg="#F5F7FB")
         window.transient(self.root)
         window.resizable(False, False)
-        window.update_idletasks()
 
         screen_w = window.winfo_screenwidth()
         screen_h = window.winfo_screenheight()
         width = min(width, max(360, screen_w - 48))
-        height = min(height, max(190, int(screen_h * 0.82)))
+        max_height = max(220, screen_h - 72)
+        height = min(height, max_height)
         x = max(12, (screen_w - width) // 2)
         y = max(12, (screen_h - height) // 2)
         window.geometry(f"{width}x{height}+{x}+{y}")
         window.grab_set()
         return window
 
-    def _dialog_text(self, parent, message, wrap_chars=58, max_lines=13):
-        """내용 길이에 따라 표시 행을 늘리고, 화면 한도를 넘으면 내부 스크롤을 제공합니다."""
+    def _dialog_text(self, parent, message, max_lines=14, width_chars=64):
+        """긴 안내는 텍스트 영역만 스크롤하고, 하단 버튼은 별도 영역에 고정합니다."""
         value = str(message)
-        estimated_lines = sum(
-            max(1, (len(line) + wrap_chars - 1) // wrap_chars)
-            for line in value.splitlines()
-        )
+        font = tkfont.Font(family="Malgun Gothic", size=9)
+        max_pixel_width = font.measure("가" * width_chars)
+        line_height = max(18, font.metrics("linespace") + 3)
+
+        def wrapped_line_count(line):
+            if not line:
+                return 1
+            count = 1
+            current_width = 0
+            for char in line:
+                char_width = font.measure(char)
+                if current_width and current_width + char_width > max_pixel_width:
+                    count += 1
+                    current_width = char_width
+                else:
+                    current_width += char_width
+            return count
+
+        estimated_lines = sum(wrapped_line_count(line) for line in value.split("\n"))
         estimated_lines = max(1, estimated_lines)
         visible_lines = min(estimated_lines, max_lines)
 
         frame = tk.Frame(parent, bg="#FFFFFF")
         text = tk.Text(
-            frame, width=wrap_chars, height=visible_lines, wrap="word",
+            frame, width=width_chars, height=visible_lines, wrap="word",
             font=("Malgun Gothic", 9), bg="#FFFFFF", fg="#536176",
             relief="flat", borderwidth=0, padx=0, pady=0,
-            cursor="arrow", takefocus=False
+            cursor="arrow", takefocus=False,
+            spacing1=2, spacing3=2
         )
         text.insert("1.0", value)
         text.configure(state="disabled")
@@ -299,32 +316,43 @@ class DigitalVaultApp:
             scrollbar.pack(side="right", fill="y")
             text.configure(yscrollcommand=scrollbar.set)
 
-        return frame, visible_lines
+        return frame, visible_lines, line_height
+
+    def _dialog_height(self, visible_lines, line_height, fixed_height):
+        screen_h = self.root.winfo_screenheight()
+        desired = fixed_height + visible_lines * line_height
+        return min(desired, max(220, screen_h - 72))
 
     def _show_message(self, kind, title, message, parent=None):
         colors = {"info": "#315ECA", "warning": "#B7791F", "error": "#C43D4B"}
         symbols = {"info": "i", "warning": "!", "error": "×"}
         text_value = str(message)
-        estimated_lines = sum(
-            max(1, (len(line) + 57) // 58) for line in text_value.splitlines()
-        )
-        visible_lines = min(max(1, estimated_lines), 13)
-        height = 178 + visible_lines * 21
+        # 버튼/제목/여백 높이를 먼저 확보하고, 본문만 남은 공간을 사용합니다.
+        font = tkfont.Font(family="Malgun Gothic", size=9)
+        line_height = max(18, font.metrics("linespace") + 3)
+        provisional_lines = min(max(1, sum(max(1, len(line) // 58 + 1) for line in text_value.split("\n"))), 14)
+        height = self._dialog_height(provisional_lines, line_height, 184)
         window = self._dialog_window(title, 560, height)
 
-        card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=24)
+        card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=22)
         card.pack(fill="both", expand=True, padx=12, pady=12)
         top = tk.Frame(card, bg="#FFFFFF")
-        top.pack(fill="x")
+        top.pack(side="top", fill="x")
         tk.Label(top, text=symbols[kind], bg=colors[kind], fg="#FFFFFF",
                  font=("Segoe UI", 13, "bold"), width=2, height=1).pack(side="left", padx=(0, 12))
         tk.Label(top, text=title, bg="#FFFFFF", fg="#202938",
                  font=("Malgun Gothic", 13, "bold")).pack(side="left")
 
-        body, _lines = self._dialog_text(card, text_value, wrap_chars=58, max_lines=13)
-        body.pack(fill="both", expand=True, pady=(18, 18))
-        ttk.Button(card, text="확인", style="Accent.TButton",
-                   command=window.destroy).pack(anchor="e")
+        button = ttk.Button(card, text="확인", style="Accent.TButton",
+                            command=window.destroy)
+        button.pack(side="bottom", anchor="e", pady=(12, 0))
+
+        available_lines = max(2, min(14, (height - 184) // line_height))
+        body, _lines, _lh = self._dialog_text(
+            card, text_value, max_lines=available_lines, width_chars=64
+        )
+        body.pack(side="top", fill="both", expand=True, pady=(16, 0))
+
         window.bind("<Return>", lambda _e: window.destroy())
         window.bind("<Escape>", lambda _e: window.destroy())
         window.wait_window()
@@ -332,22 +360,31 @@ class DigitalVaultApp:
     def _ask_yes_no(self, title, message, parent=None):
         result = {"value": False}
         text_value = str(message)
-        estimated_lines = sum(
-            max(1, (len(line) + 57) // 58) for line in text_value.splitlines()
-        )
-        visible_lines = min(max(1, estimated_lines), 13)
-        window = self._dialog_window(title, 560, 155 + visible_lines * 21)
-        card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=24)
+        font = tkfont.Font(family="Malgun Gothic", size=9)
+        line_height = max(18, font.metrics("linespace") + 3)
+        provisional_lines = min(max(1, sum(max(1, len(line) // 58 + 1) for line in text_value.split("\n"))), 14)
+        height = self._dialog_height(provisional_lines, line_height, 178)
+        window = self._dialog_window(title, 560, height)
+
+        card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=22)
         card.pack(fill="both", expand=True, padx=12, pady=12)
         tk.Label(card, text=title, bg="#FFFFFF", fg="#202938",
-                 font=("Malgun Gothic", 13, "bold")).pack(anchor="w")
-        body, _lines = self._dialog_text(card, text_value, wrap_chars=58, max_lines=13)
-        body.pack(fill="both", expand=True, pady=(18, 18))
+                 font=("Malgun Gothic", 13, "bold")).pack(side="top", anchor="w")
+
+        # 버튼을 먼저 하단에 배치해 본문 길이와 관계없이 항상 보이도록 합니다.
         actions = tk.Frame(card, bg="#FFFFFF")
-        actions.pack(fill="x")
+        actions.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
         ttk.Button(actions, text="확인", style="Accent.TButton",
                    command=lambda: (result.update(value=True), window.destroy())).pack(side="right")
+
+        available_lines = max(2, min(14, (height - 178) // line_height))
+        body, _lines, _lh = self._dialog_text(
+            card, text_value, max_lines=available_lines, width_chars=64
+        )
+        body.pack(side="top", fill="both", expand=True, pady=(16, 0))
+
+        window.bind("<Return>", lambda _e: (result.update(value=True), window.destroy()))
         window.bind("<Escape>", lambda _e: window.destroy())
         window.wait_window()
         return result["value"]
@@ -357,28 +394,38 @@ class DigitalVaultApp:
         show = kwargs.get("show")
         initial = kwargs.get("initialvalue", "")
         prompt_text = str(prompt)
-        estimated_lines = sum(
-            max(1, (len(line) + 57) // 58) for line in prompt_text.splitlines()
-        )
-        visible_lines = min(max(1, estimated_lines), 8)
-        window = self._dialog_window(title, 560, 205 + visible_lines * 21)
-        card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=24)
+        font = tkfont.Font(family="Malgun Gothic", size=9)
+        line_height = max(18, font.metrics("linespace") + 3)
+        provisional_lines = min(max(1, sum(max(1, len(line) // 58 + 1) for line in prompt_text.split("\n"))), 8)
+        height = self._dialog_height(provisional_lines, line_height, 222)
+        window = self._dialog_window(title, 560, height)
+
+        card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=22)
         card.pack(fill="both", expand=True, padx=12, pady=12)
         tk.Label(card, text=title, bg="#FFFFFF", fg="#202938",
-                 font=("Malgun Gothic", 13, "bold")).pack(anchor="w")
-        body, _lines = self._dialog_text(card, prompt_text, wrap_chars=58, max_lines=8)
-        body.pack(fill="x", pady=(16, 10))
-        value = tk.StringVar(value=initial or "")
-        entry = tk.Entry(card, textvariable=value, show=show or "",
-                         relief="solid", bd=1, font=("Malgun Gothic", 10))
-        entry.pack(fill="x", ipady=9)
+                 font=("Malgun Gothic", 13, "bold")).pack(side="top", anchor="w")
+
         actions = tk.Frame(card, bg="#FFFFFF")
-        actions.pack(fill="x", pady=(20, 0))
+        actions.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
+
         def submit():
             result["value"] = value.get()
             window.destroy()
+
         ttk.Button(actions, text="확인", style="Accent.TButton", command=submit).pack(side="right")
+
+        value = tk.StringVar(value=initial or "")
+        entry = tk.Entry(card, textvariable=value, show=show or "",
+                         relief="solid", bd=1, font=("Malgun Gothic", 10))
+        entry.pack(side="bottom", fill="x", ipady=9, pady=(10, 0))
+
+        available_lines = max(2, min(8, (height - 222) // line_height))
+        body, _lines, _lh = self._dialog_text(
+            card, prompt_text, max_lines=available_lines, width_chars=64
+        )
+        body.pack(side="top", fill="both", expand=True, pady=(16, 0))
+
         window.bind("<Return>", lambda _e: submit())
         window.bind("<Escape>", lambda _e: window.destroy())
         entry.focus_set()

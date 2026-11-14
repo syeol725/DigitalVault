@@ -550,11 +550,20 @@ class Vault:
             return
 
         print("\n===== 저장된 문서 목록 =====")
-        for number, info in enumerate(self.index.values(), 1):
-            print(f"{number}. {info['name']}")
+        print("{:<5}{:<30}{:<8}{:>12}".format("번호", "파일명", "형식", "암호화 크기"))
+        print("-" * 58)
+        items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
+        for number, (file_id, info) in enumerate(items, 1):
+            path = self.docs / (file_id + ".bin")
+            size = path.stat().st_size if path.exists() else 0
+            print("{:<5}{:<30}{:<8}{:>10,} B".format(
+                number, info["name"][:28], info["extension"], size
+            ))
+        print("-" * 58)
+        print("총 문서: {}개".format(len(items)))
 
     def choose_id(self):
-        items = list(self.index.items())
+        items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
         if not items:
             print("저장된 문서가 없습니다.")
             return None

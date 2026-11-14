@@ -23,25 +23,29 @@ class DigitalVaultSecurityTests(unittest.TestCase):
         for answer in ("", "maybe", "계속", "1"):
             self.assertEqual(continue_decision(answer), "invalid")
 
-    def test_main_menu_displays_a_to_n(self):
+    def test_main_menu_displays_a_to_n_without_auto_lock(self):
         from digital_vault import show_main_menu
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            show_main_menu(299, 3)
+            show_main_menu(3)
         rendered = output.getvalue()
-        self.assertIn("자동 잠금까지 남은 시간: 04:59", rendered)
-        self.assertIn("A  문서 추가", rendered)
-        self.assertIn("N  금고 정보", rendered)
-        self.assertIn("0  금고 잠금 및 종료", rendered)
+        self.assertIn("DigitalVault  |  문서 3개", rendered)
+        self.assertIn("A 추가", rendered)
+        self.assertIn("N 금고 정보", rendered)
+        self.assertIn("0 잠금 및 종료", rendered)
+        self.assertNotIn("=" * 20, rendered)
+        self.assertNotIn("자동 잠금", rendered)
+        self.assertNotIn("남은 시간", rendered)
         self.assertNotIn("선택:", rendered)
 
-    def test_menu_timer_line_has_fixed_display_width(self):
-        from digital_vault import display_width, menu_timer_line
-        self.assertEqual(display_width(menu_timer_line(299)), 58)
-        self.assertIn("04:59", menu_timer_line(299))
+    def test_read_input_waits_without_timeout(self):
+        from unittest.mock import patch
+        from digital_vault import read_input
+        with patch("builtins.input", return_value="n"):
+            self.assertEqual(read_input("계속하시겠습니까? (y/n): "), "n")
 
     def test_document_list_is_aligned_sorted_and_shows_total_size(self):
-        from digital_vault import Vault
+        from digital_vault import Vault, display_width
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             docs = root / "documents"
@@ -63,8 +67,14 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertLess(rendered.index("Alpha 보고서.docx"), rendered.index("zeta.pdf"))
             self.assertIn("DOCX", rendered)
             self.assertIn("PDF", rendered)
-            self.assertIn("총 문서: 2개", rendered)
-            self.assertIn("총 암호화 크기: 12 B", rendered)
+            self.assertIn("총 2개  |  12 B", rendered)
+            self.assertIn("번호", rendered)
+            self.assertIn("파일명", rendered)
+            self.assertIn("암호화 크기", rendered)
+            rows = rendered.splitlines()
+            header = next(line for line in rows if "번호" in line and "파일명" in line)
+            data = next(line for line in rows if "Alpha 보고서.docx" in line)
+            self.assertEqual(display_width(header), display_width(data))
 
     def test_long_document_name_is_truncated_by_display_width(self):
         from digital_vault import display_width, truncate_display
@@ -129,6 +139,37 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             ))
             after_recovery = Vault(root / "vault")
             self.assertTrue(after_recovery.login("recovered-after-rotation-987"))
+
+    def test_lock_then_new_session_can_log_in_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "vault"
+            first = Vault(folder)
+            first.create("relogin-password-123")
+            source = Path(directory) / "relogin.txt"
+            source.write_text("still here", encoding="utf-8")
+            first.add_document(source)
+
+            first.lock()
+            self.assertIsNone(first.key)
+            self.assertEqual(first.index, {})
+
+            second = Vault(folder)
+            self.assertTrue(second.login("relogin-password-123"))
+            self.assertEqual(len(second.index), 1)
+            self.assertTrue(second.integrity_check())
+
+    def test_gui_clear_resets_tree_reference_before_relogin(self):
+        from digital_vault_gui import DigitalVaultApp
+
+        class FakeRoot:
+            def winfo_children(self):
+                return []
+
+        app = DigitalVaultApp.__new__(DigitalVaultApp)
+        app.root = FakeRoot()
+        app.tree = object()
+        app._clear()
+        self.assertIsNone(app.tree)
 
     def test_kdf_rejects_untrusted_parameters(self):
         with self.assertRaises(ValueError):
@@ -212,6 +253,25 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertNotIn("security.log", names)
             self.assertFalse(any(name.lower().endswith(("readme.md", ".exe", ".py"))
                                  for name in names))
+
+    def test_backup_overwrite_requires_confirmation_flag(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("backup-password-123")
+            backup = root / "vault-backup.zip"
+            vault.create_backup(backup)
+
+            with self.assertRaises(FileExistsError):
+                vault.create_backup(backup)
+
+            backup.write_bytes(b"old backup placeholder")
+            count = vault.create_backup(backup, overwrite=True)
+            self.assertGreaterEqual(count, 2)
+            with zipfile.ZipFile(backup, "r") as archive:
+                self.assertIn("backup_manifest.json", archive.namelist())
+                self.assertIn("vault.json", archive.namelist())
 
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:

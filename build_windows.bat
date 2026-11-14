@@ -8,7 +8,7 @@ if errorlevel 1 goto error
 py -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 goto error
 
-py -m PyInstaller --clean --noconfirm --onefile --console --name DigitalVault digital_vault.py
+py -m PyInstaller --clean --noconfirm --onefile --windowed --hidden-import digital_vault_gui --name DigitalVault digital_vault.py
 if errorlevel 1 goto error
 
 echo.

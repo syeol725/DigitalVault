@@ -26,8 +26,6 @@ LOCK_SECONDS = 60
 FORMAT_VERSION = 2
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
-IDLE_TIMEOUT_SECONDS = 300
-SESSION_DEADLINE = None
 WRAP_AAD = b"DigitalVault:master-key:v2"
 INDEX_AAD = b"DigitalVault:index:v2"
 
@@ -95,116 +93,9 @@ def decrypt(key, data, aad=None):
     return AESGCM(key).decrypt(data[:12], data[12:], aad)
 
 
-def start_session_timer():
-    global SESSION_DEADLINE
-    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-
-
-def remaining_session_seconds():
-    if SESSION_DEADLINE is None:
-        return IDLE_TIMEOUT_SECONDS
-    return max(0, int(SESSION_DEADLINE - time.monotonic() + 0.999))
-
-
-def timed_input(prompt, timeout, refresh=None):
-    """입력 대기 중 남은 자동 잠금 시간을 표시하고, 필요하면 화면을 갱신합니다."""
-    global SESSION_DEADLINE
-    chars = []
-    if SESSION_DEADLINE is None:
-        SESSION_DEADLINE = time.monotonic() + timeout
-    last_rendered = 0
-    last_refresh_remaining = remaining_session_seconds()
-    last_refresh_at = time.monotonic()
-
-    def render():
-        nonlocal last_rendered, last_refresh_remaining, last_refresh_at
-        remaining = remaining_session_seconds()
-        now = time.monotonic()
-        if refresh is not None and (
-            remaining != last_refresh_remaining or now - last_refresh_at >= 1.0
-        ):
-            refresh(remaining)
-            last_refresh_remaining = remaining
-            last_refresh_at = now
-            last_rendered = 0
-
-        if refresh is None:
-            line = prompt + "".join(chars)
-        else:
-            line = prompt + "".join(chars)
-
-        sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
-        sys.stdout.flush()
-        last_rendered = len(line)
-
-    if os.name == "nt":
-        import msvcrt
-        while remaining_session_seconds() > 0:
-            render()
-            if msvcrt.kbhit():
-                ch = msvcrt.getwch()
-                code = ord(ch)
-                if code in (10, 13):
-                    print()
-                    return "".join(chars)
-                if code == 3:
-                    raise KeyboardInterrupt
-                if code in (0, 224):
-                    msvcrt.getwch()
-                    continue
-                if code == 8:
-                    if chars:
-                        chars.pop()
-                elif ch.isprintable():
-                    chars.append(ch)
-                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-            else:
-                time.sleep(0.1)
-    else:
-        import select
-        import termios
-        import tty
-        if not sys.stdin.isatty():
-            return input(prompt)
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            while remaining_session_seconds() > 0:
-                render()
-                ready, _, _ = select.select(
-                    [sys.stdin], [], [], min(0.2, remaining_session_seconds())
-                )
-                if not ready:
-                    continue
-                ch = os.read(fd, 1).decode("utf-8", errors="ignore")
-                if not ch:
-                    continue
-                code = ord(ch)
-                if code in (10, 13):
-                    print()
-                    return "".join(chars)
-                if code in (8, 127):
-                    if chars:
-                        chars.pop()
-                elif code == 3:
-                    raise KeyboardInterrupt
-                elif ch.isprintable():
-                    chars.append(ch)
-                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-    print()
-    print("미사용 시간이 초과되어 금고를 잠급니다.")
-    return None
-
-
 def read_input(prompt):
-    value = timed_input(prompt, IDLE_TIMEOUT_SECONDS)
-    if value is None:
-        raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
-    return value
+    """시간 제한 없이 일반 입력을 받습니다."""
+    return input(prompt)
 
 
 def clear_console():
@@ -248,104 +139,21 @@ def pad_display(value, width, align="left"):
     return value + " " * padding
 
 
-def format_duration(seconds):
-    seconds = max(0, int(seconds))
-    return f"{seconds // 60:02d}:{seconds % 60:02d}"
-
-
-def menu_timer_line(remaining_seconds):
-    """메인 메뉴의 타이머 행을 고정된 표시 폭으로 만듭니다."""
-    return pad_display(
-        f"자동 잠금까지 남은 시간: {format_duration(remaining_seconds)}", 58
-    )
-
-
-def update_menu_timer(remaining_seconds):
-    """Windows 콘솔에서 메뉴 전체가 아닌 타이머 행만 갱신합니다."""
-    if not getattr(sys.stdout, "isatty", lambda: False)() or os.name != "nt":
-        return
-
-    line = menu_timer_line(remaining_seconds)
-
-    # Windows 콘솔 API로 현재 입력 커서를 보존하면서 타이머 행만 덮어씁니다.
-    import ctypes
-    from ctypes import wintypes
-
-    class COORD(ctypes.Structure):
-        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
-
-    class SMALL_RECT(ctypes.Structure):
-        _fields_ = [
-            ("Left", wintypes.SHORT), ("Top", wintypes.SHORT),
-            ("Right", wintypes.SHORT), ("Bottom", wintypes.SHORT),
-        ]
-
-    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", COORD),
-            ("dwCursorPosition", COORD),
-            ("wAttributes", wintypes.WORD),
-            ("srWindow", SMALL_RECT),
-            ("dwMaximumWindowSize", COORD),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
-    kernel32.GetStdHandle.restype = wintypes.HANDLE
-    kernel32.GetConsoleScreenBufferInfo.argtypes = [
-        wintypes.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)
-    ]
-    kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
-    kernel32.SetConsoleCursorPosition.argtypes = [wintypes.HANDLE, COORD]
-    kernel32.SetConsoleCursorPosition.restype = wintypes.BOOL
-    kernel32.WriteConsoleW.argtypes = [
-        wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
-    ]
-    kernel32.WriteConsoleW.restype = wintypes.BOOL
-
-    handle = kernel32.GetStdHandle(0xFFFFFFF5)  # STD_OUTPUT_HANDLE
-    info = CONSOLE_SCREEN_BUFFER_INFO()
-    if not handle or not kernel32.GetConsoleScreenBufferInfo(
-        handle, ctypes.byref(info)
-    ):
-        return
-
-    original = info.dwCursorPosition
-    timer_position = COORD(0, max(0, original.Y - 16))
-    written = wintypes.DWORD()
-    try:
-        if kernel32.SetConsoleCursorPosition(handle, timer_position):
-            kernel32.WriteConsoleW(
-                handle, ctypes.c_wchar_p(line), len(line), ctypes.byref(written), None
-            )
-    finally:
-        kernel32.SetConsoleCursorPosition(handle, original)
-
-
-def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):
+def show_main_menu(document_count=0):
     print()
-    print("=" * 58)
-    print("DigitalVault")
-    print("=" * 58)
-    print(f"현재 금고: {document_count}개 문서")
-    print(menu_timer_line(remaining_seconds))
-    print("-" * 58)
+    print(f"DigitalVault  |  문서 {document_count}개")
+    print("-" * 48)
     print("문서 관리")
-    print("  A  문서 추가          B  문서 목록")
-    print("  C  문서 열기          D  문서 내보내기")
-    print("  E  문서 삭제          F  문서 이름 변경")
-    print()
+    print(" A 추가   B 목록   C 열기   D 내보내기")
+    print(" E 삭제   F 이름 변경")
     print("보안 관리")
-    print("  G  비밀번호 변경      H  마스터 키 재발급")
-    print("  I  복구 키 발급       J  보안 기록 확인")
-    print()
+    print(" G 비밀번호 변경   H 마스터 키 재발급")
+    print(" I 복구 키 발급    J 보안 기록")
     print("금고 관리")
-    print("  K  금고 백업          L  백업 불러오기")
-    print("  M  무결성 검사        N  금고 정보")
-    print("-" * 58)
-    print("  0  금고 잠금 및 종료")
-    print("=" * 58)
+    print(" K 백업   L 백업 불러오기")
+    print(" M 무결성 검사   N 금고 정보")
+    print("-" * 48)
+    print(" 0 잠금 및 종료")
 
 
 def normalize_menu_choice(value):
@@ -385,31 +193,15 @@ def default_vault_directory():
     return app_directory() / "DigitalVaultData"
 
 
-def masked_password(prompt, timeout=None):
-    """실제 문자를 숨기고 별표로 표시합니다. timeout 초과 시 None을 반환합니다."""
-    print(prompt, end="", flush=True)
-    global SESSION_DEADLINE
-    deadline = SESSION_DEADLINE if SESSION_DEADLINE is not None else (
-        None if timeout is None else time.monotonic() + timeout
-    )
-
+def masked_password(prompt):
+    """비밀번호 입력 문자를 화면에 표시하지 않습니다."""
     if os.name == "nt":
         import msvcrt
+
+        print(prompt, end="", flush=True)
         chars = []
         while True:
-            if deadline is not None and time.monotonic() >= deadline:
-                print()
-                print("입력 대기 시간이 초과되어 금고를 잠급니다.")
-                return None
-            if not msvcrt.kbhit():
-                time.sleep(0.05)
-                continue
             char = msvcrt.getwch()
-            if SESSION_DEADLINE is not None:
-                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-                deadline = SESSION_DEADLINE
-            elif timeout is not None:
-                deadline = time.monotonic() + timeout
             code = ord(char)
             if code in (10, 13):
                 print()
@@ -430,7 +222,6 @@ def masked_password(prompt, timeout=None):
 
     if sys.stdin.isatty():
         import codecs
-        import select
         import termios
         import tty
 
@@ -438,29 +229,14 @@ def masked_password(prompt, timeout=None):
         old_settings = termios.tcgetattr(fd)
         chars = []
         decoder = codecs.getincrementaldecoder("utf-8")()
+        print(prompt, end="", flush=True)
         try:
             tty.setcbreak(fd)
             input_settings = termios.tcgetattr(fd)
             input_settings[3] &= ~termios.ECHO
             termios.tcsetattr(fd, termios.TCSADRAIN, input_settings)
             while True:
-                wait = 0.1
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        print()
-                        print("입력 대기 시간이 초과되어 금고를 잠급니다.")
-                        return None
-                    wait = min(wait, remaining)
-                ready, _, _ = select.select([fd], [], [], wait)
-                if not ready:
-                    continue
                 raw = os.read(fd, 1)
-                if SESSION_DEADLINE is not None:
-                    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
-                    deadline = SESSION_DEADLINE
-                elif timeout is not None:
-                    deadline = time.monotonic() + timeout
                 if raw in (bytes([13]), bytes([10])):
                     print()
                     return "".join(chars)
@@ -483,23 +259,17 @@ def masked_password(prompt, timeout=None):
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-    if timeout is not None:
-        return getpass.getpass(prompt)
     return getpass.getpass(prompt)
 
-def prompt_new_password(timeout=None):
-    while True:
-        password = masked_password("새 비밀번호: ", timeout)
-        if password is None:
-            raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
 
+def prompt_new_password():
+    while True:
+        password = masked_password("새 비밀번호: ")
         if len(password) < 8:
             print("비밀번호는 8자 이상이어야 합니다. 다시 입력하세요.")
             continue
 
-        confirm = masked_password("비밀번호 확인: ", timeout)
-        if confirm is None:
-            raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
+        confirm = masked_password("비밀번호 확인: ")
         if password != confirm:
             print("비밀번호가 일치하지 않습니다.")
             continue
@@ -776,21 +546,50 @@ class Vault:
             print("저장 오류:", error)
 
     def list_documents(self):
-        if not self.index:
-            print("\n===== 저장된 문서 목록 =====")
-            print("\n저장된 문서가 없습니다.")
-            print("총 문서: 0개 | 총 암호화 크기: 0 B")
+        items = sorted(
+            self.index.items(),
+            key=lambda item: item[1]["name"].casefold()
+        )
+        print("\n저장된 문서")
+        if not items:
+            print("저장된 문서가 없습니다.")
+            print("총 0개  |  0 B")
             return
 
-        number_width = 4
-        name_width = 38
-        extension_width = 8
-        size_width = 16
+        number_width = max(
+            display_width("번호"),
+            len(str(len(items)))
+        )
+        name_width = min(
+            36,
+            max(
+                display_width("파일명"),
+                max(display_width(info["name"]) for _, info in items)
+            )
+        )
+        extension_width = max(
+            display_width("형식"),
+            max(
+                display_width(info["extension"].lstrip(".").upper())
+                for _, info in items
+            )
+        )
+        sizes = []
+        total_size = 0
+        for file_id, _ in items:
+            path = self.docs / (file_id + ".bin")
+            size = path.stat().st_size if path.exists() else 0
+            sizes.append(size)
+            total_size += size
+        size_width = max(
+            display_width("암호화 크기"),
+            max(display_width(f"{size:,} B") for size in sizes)
+        )
         table_width = (
-            number_width + 2 + name_width + 2 + extension_width + 2 + size_width
+            number_width + 2 + name_width + 2
+            + extension_width + 2 + size_width
         )
 
-        print("\n===== 저장된 문서 목록 =====")
         print(
             f"{pad_display('번호', number_width, 'right')}  "
             f"{pad_display('파일명', name_width)}  "
@@ -799,17 +598,7 @@ class Vault:
         )
         print("-" * table_width)
 
-        items = sorted(
-            self.index.items(),
-            key=lambda item: item[1]["name"].casefold()
-        )
-        total_size = 0
-
-        for number, (file_id, info) in enumerate(items, 1):
-            path = self.docs / (file_id + ".bin")
-            size = path.stat().st_size if path.exists() else 0
-            total_size += size
-
+        for number, ((file_id, info), size) in enumerate(zip(items, sizes), 1):
             name = truncate_display(info["name"], name_width)
             extension = info["extension"].lstrip(".").upper()
             size_text = f"{size:,} B"
@@ -821,11 +610,7 @@ class Vault:
             )
 
         print("-" * table_width)
-        print(
-            f"총 문서: {len(items)}개"
-            f"  |  총 암호화 크기: {total_size:,} B"
-        )
-
+        print(f"총 {len(items)}개  |  {total_size:,} B")
     def choose_id(self):
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
         if not items:
@@ -1111,10 +896,10 @@ class Vault:
         print(f"검사 문서: {len(index)}개 / 이상 항목: {len(failures)}개")
         return not failures
 
-    def create_backup(self, destination):
+    def create_backup(self, destination, overwrite=False):
         destination = Path(destination).expanduser()
-        if destination.exists():
-            raise FileExistsError("기존 백업 파일을 덮어쓰지 않습니다.")
+        if destination.exists() and not overwrite:
+            raise FileExistsError("같은 이름의 백업본이 이미 있습니다.")
         # 백업에는 복원에 필요한 금고 메타데이터, 암호화 인덱스,
         # 암호화된 문서만 포함합니다. 보안 이벤트 로그는 별도 운영 기록이므로 제외합니다.
         files = [self.meta_file, self.index_file] + sorted(self.docs.glob("*.bin"))
@@ -1334,189 +1119,8 @@ class Vault:
 
 # ---------- 실행 ----------
 def main():
-    print("=" * 48)
-    print(" DigitalVault Portable")
-    print("=" * 48)
-    print(f"프로그램 위치: {app_directory()}")
-    print(f"기본 금고 위치: {default_vault_directory()}")
-
-    folder_text = input(
-        "금고 저장 폴더 (Enter=USB의 기본 폴더): "
-    ).strip().strip('"')
-
-    folder = (
-        Path(folder_text).expanduser()
-        if folder_text
-        else default_vault_directory()
-    )
-    vault = Vault(folder)
-
-    if not vault.exists:
-        print("새 금고를 생성합니다.")
-        vault.create(prompt_new_password())
-
-    if getattr(vault, "recovery_key_display", None):
-        print("\n[중요] 복구 키를 별도 장소에 보관하세요. 다시 표시되지 않습니다.")
-        print("복구 키:", vault.recovery_key_display)
-
-    while True:
-        entered = masked_password("비밀번호 (복구하려면 R 입력): ")
-        if entered.strip().lower() == "r":
-            try:
-                recovery = masked_password("복구 키: ")
-                vault.recover_with_key(recovery, prompt_new_password())
-                print("복구가 완료되었습니다.")
-                break
-            except Exception as error:
-                print("복구에 실패했습니다:", error)
-                return
-        if vault.login(entered):
-            break
-        if vault.lock_status():
-            return
-
-    start_session_timer()
-    # 인증 과정의 출력(비밀번호 입력 안내 포함)을 지우고 메뉴 화면만 표시한다.
-    clear_console()
-    first_menu = True
-    try:
-        while vault.key is not None:
-            if remaining_session_seconds() <= 0:
-                vault.lock()
-                break
-            if not first_menu:
-                clear_console()
-            first_menu = False
-            show_main_menu(remaining_session_seconds(), len(vault.index))
-
-            def refresh_menu(remaining):
-                update_menu_timer(remaining)
-
-            choice = timed_input(
-                "선택: ", IDLE_TIMEOUT_SECONDS, refresh=refresh_menu
-            )
-            if choice is None:
-                vault.lock()
-                break
-            choice = normalize_menu_choice(choice)
-            if choice == "0":
-                vault.lock()
-                break
-            elif choice == "A":
-                vault.add_document()
-            elif choice == "B":
-                vault.list_documents()
-            elif choice == "C":
-                vault.open_document()
-            elif choice == "D":
-                vault.export_document()
-            elif choice == "E":
-                vault.delete_document()
-            elif choice == "F":
-                vault.rename_document()
-            elif choice == "G":
-                old = masked_password("현재 비밀번호: ")
-                new = prompt_new_password()
-                vault.change_password(old, new)
-            elif choice == "H":
-                answer = read_input("마스터 키를 재발급할까요? (y/n): ").strip().lower()
-                if answer == "y":
-                    current = masked_password("현재 비밀번호: ")
-                    meta = json.loads(vault.meta_file.read_text(encoding="utf-8"))
-                    recovery = None
-                    if meta.get("recovery_wrapped_key"):
-                        recovery = masked_password("복구 키 (복구 기능 유지용): ")
-                    vault.rotate_master_key(current, recovery)
-                else:
-                    print("마스터 키 재발급을 취소했습니다.")
-            elif choice == "I":
-                current = masked_password("현재 비밀번호: ")
-                recovery = vault.setup_recovery_key(current)
-                print("\n새 복구 키 (한 번만 표시):")
-                print(recovery)
-                print("별도 장소에 안전하게 보관하세요.")
-            elif choice == "J":
-                vault.show_security_log()
-            elif choice == "K":
-                root = None
-                try:
-                    root = Tk()
-                    root.withdraw()
-                    destination = filedialog.asksaveasfilename(
-                        title="금고 백업 파일을 저장할 위치 선택",
-                        defaultextension=".zip",
-                        filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
-                    )
-                except Exception as error:
-                    print(f"백업 저장 창을 열 수 없습니다: {error}")
-                    destination = ""
-                finally:
-                    if root is not None:
-                        root.destroy()
-                if destination:
-                    print(f"백업 완료: {vault.create_backup(destination)}개 파일")
-                else:
-                    print("금고 백업을 취소했습니다.")
-            elif choice == "L":
-                root = None
-                try:
-                    root = Tk()
-                    root.withdraw()
-                    archive = filedialog.askopenfilename(
-                        title="현재 금고에 병합할 백업 파일 선택",
-                        filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
-                    )
-                except Exception as error:
-                    print(f"백업 파일 선택 창을 열 수 없습니다: {error}")
-                    archive = ""
-                finally:
-                    if root is not None:
-                        root.destroy()
-
-                if archive:
-                    backup_password = masked_password(
-                        "백업 당시 금고 비밀번호: ", timeout=IDLE_TIMEOUT_SECONDS
-                    )
-                    if backup_password is None:
-                        raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
-                    merged_count = vault.merge_backup(archive, backup_password)
-                    print(f"백업 병합 완료: 문서 {merged_count}개 추가")
-                    print(f"현재 금고 문서 수: {len(vault.index)}개")
-                    print("현재 USB 금고는 열린 상태로 유지됩니다.")
-                else:
-                    print("백업 불러오기를 취소했습니다.")
-            elif choice == "M":
-                vault.integrity_check()
-            elif choice == "N":
-                vault.show_vault_info()
-            else:
-                print("올바른 메뉴 문자(A~N)를 입력하세요.")
-                continue
-
-            answer = read_input(
-                "\n작업을 계속하시겠습니까? (Y/N): "
-            )
-            decision = continue_decision(answer)
-            if decision == "continue":
-                clear_console()
-                continue
-            if decision == "exit":
-                vault.lock()
-                return
-
-            print("Y 또는 N을 입력하세요. 메인 메뉴로 돌아갑니다.")
-            continue
-
-    except TimeoutError as error:
-        print(f"\n{error}")
-        vault.lock()
-    except (KeyboardInterrupt, EOFError):
-        print("\n프로그램을 종료합니다.")
-    except Exception as error:
-        print(f"\n작업 중 오류가 발생했습니다: {error}")
-    finally:
-        if vault.key is not None:
-            vault.lock()
+    from digital_vault_gui import main as gui_main
+    gui_main()
 
 
 if __name__ == "__main__":

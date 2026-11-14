@@ -30,6 +30,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Compile Python source
-        run: python -m py_compile digital_vault.py test_security.py
+        run: python -m py_compile digital_vault.py digital_vault_gui.py test_security.py
       - name: Run security regression tests
         run: python -m unittest -v test_security.py

@@ -141,26 +141,19 @@ def pad_display(value, width, align="left"):
 
 def show_main_menu(document_count=0):
     print()
-    print("=" * 58)
-    print("DigitalVault")
-    print("=" * 58)
-    print(f"현재 금고: {document_count}개 문서")
-    print("-" * 58)
+    print(f"DigitalVault  |  문서 {document_count}개")
+    print("-" * 48)
     print("문서 관리")
-    print("  A  문서 추가          B  문서 목록")
-    print("  C  문서 열기          D  문서 내보내기")
-    print("  E  문서 삭제          F  문서 이름 변경")
-    print()
+    print(" A 추가   B 목록   C 열기   D 내보내기")
+    print(" E 삭제   F 이름 변경")
     print("보안 관리")
-    print("  G  비밀번호 변경      H  마스터 키 재발급")
-    print("  I  복구 키 발급       J  보안 기록 확인")
-    print()
+    print(" G 비밀번호 변경   H 마스터 키 재발급")
+    print(" I 복구 키 발급    J 보안 기록")
     print("금고 관리")
-    print("  K  금고 백업          L  백업 불러오기")
-    print("  M  무결성 검사        N  금고 정보")
-    print("-" * 58)
-    print("  0  금고 잠금 및 종료")
-    print("=" * 58)
+    print(" K 백업   L 백업 불러오기")
+    print(" M 무결성 검사   N 금고 정보")
+    print("-" * 48)
+    print(" 0 잠금 및 종료")
 
 
 def normalize_menu_choice(value):
@@ -553,21 +546,41 @@ class Vault:
             print("저장 오류:", error)
 
     def list_documents(self):
-        if not self.index:
-            print("\n===== 저장된 문서 목록 =====")
-            print("\n저장된 문서가 없습니다.")
-            print("총 문서: 0개 | 총 암호화 크기: 0 B")
+        items = sorted(
+            self.index.items(),
+            key=lambda item: item[1]["name"].casefold()
+        )
+        print("\n저장된 문서")
+        if not items:
+            print("저장된 문서가 없습니다.")
+            print("총 0개  |  0 B")
             return
 
-        number_width = 4
-        name_width = 38
-        extension_width = 8
-        size_width = 16
+        number_width = max(2, len(str(len(items))))
+        name_width = min(
+            36,
+            max(8, max(display_width(info["name"]) for _, info in items))
+        )
+        extension_width = max(
+            4,
+            max(len(info["extension"].lstrip(".")) for _, info in items)
+        )
+        sizes = []
+        total_size = 0
+        for file_id, _ in items:
+            path = self.docs / (file_id + ".bin")
+            size = path.stat().st_size if path.exists() else 0
+            sizes.append(size)
+            total_size += size
+        size_width = max(
+            len("암호화 크기"),
+            max(len(f"{size:,} B") for size in sizes)
+        )
         table_width = (
-            number_width + 2 + name_width + 2 + extension_width + 2 + size_width
+            number_width + 2 + name_width + 2
+            + extension_width + 2 + size_width
         )
 
-        print("\n===== 저장된 문서 목록 =====")
         print(
             f"{pad_display('번호', number_width, 'right')}  "
             f"{pad_display('파일명', name_width)}  "
@@ -576,17 +589,7 @@ class Vault:
         )
         print("-" * table_width)
 
-        items = sorted(
-            self.index.items(),
-            key=lambda item: item[1]["name"].casefold()
-        )
-        total_size = 0
-
-        for number, (file_id, info) in enumerate(items, 1):
-            path = self.docs / (file_id + ".bin")
-            size = path.stat().st_size if path.exists() else 0
-            total_size += size
-
+        for number, ((file_id, info), size) in enumerate(zip(items, sizes), 1):
             name = truncate_display(info["name"], name_width)
             extension = info["extension"].lstrip(".").upper()
             size_text = f"{size:,} B"
@@ -598,11 +601,7 @@ class Vault:
             )
 
         print("-" * table_width)
-        print(
-            f"총 문서: {len(items)}개"
-            f"  |  총 암호화 크기: {total_size:,} B"
-        )
-
+        print(f"총 {len(items)}개  |  {total_size:,} B")
     def choose_id(self):
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
         if not items:

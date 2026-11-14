@@ -11,6 +11,9 @@ import shutil
 import sys
 import tempfile
 import time
+import zipfile
+from io import BytesIO
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, filedialog
 
@@ -320,17 +323,22 @@ class Vault:
         master = secrets.token_bytes(32)
         wrap_key = derive_key(password, salt)
         wrapped = encrypt(wrap_key, master, WRAP_AAD)
-
-        write_json(
-            self.meta_file,
-            {
-                "format_version": FORMAT_VERSION,
-                "kdf": KDF_PARAMS,
-                "salt": base64.b64encode(salt).decode("ascii"),
-                "wrapped_key": base64.b64encode(wrapped).decode("ascii"),
-            },
+        recovery_key = secrets.token_urlsafe(32)
+        recovery_salt = secrets.token_bytes(16)
+        recovery_wrapped = encrypt(
+            derive_key(recovery_key, recovery_salt), master,
+            b"DigitalVault:recovery-key:v1"
         )
+        write_json(self.meta_file, {
+            "format_version": FORMAT_VERSION,
+            "kdf": KDF_PARAMS,
+            "salt": base64.b64encode(salt).decode("ascii"),
+            "wrapped_key": base64.b64encode(wrapped).decode("ascii"),
+            "recovery_salt": base64.b64encode(recovery_salt).decode("ascii"),
+            "recovery_wrapped_key": base64.b64encode(recovery_wrapped).decode("ascii"),
+        })
         self.key, self.index = master, {}
+        self.recovery_key_display = recovery_key
         self.save_index()
 
     def lock_status(self):
@@ -701,18 +709,178 @@ class Vault:
 
             new_salt = secrets.token_bytes(16)
             new_wrapped = encrypt(derive_key(new_password, new_salt), master, WRAP_AAD)
-            write_json(
-                self.meta_file,
-                {
-                    "format_version": FORMAT_VERSION,
-                    "kdf": KDF_PARAMS,
-                    "salt": base64.b64encode(new_salt).decode("ascii"),
-                    "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
-                },
-            )
+            meta.update({
+                "format_version": FORMAT_VERSION,
+                "kdf": KDF_PARAMS,
+                "salt": base64.b64encode(new_salt).decode("ascii"),
+                "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
+            })
+            write_json(self.meta_file, meta)
             print("비밀번호를 변경했습니다.")
         except Exception:
             print("비밀번호 변경에 실패했습니다. 현재 비밀번호를 확인하세요.")
+
+
+    def setup_recovery_key(self, password):
+        meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+        salt = base64.b64decode(meta["salt"], validate=True)
+        master = decrypt(derive_key(password, salt, meta.get("kdf")),
+                         base64.b64decode(meta["wrapped_key"], validate=True), WRAP_AAD)
+        if not secrets.compare_digest(master, self.key):
+            raise ValueError("현재 비밀번호가 올바르지 않습니다.")
+        recovery_key = secrets.token_urlsafe(32)
+        recovery_salt = secrets.token_bytes(16)
+        recovery_wrapped = encrypt(derive_key(recovery_key, recovery_salt), master,
+                                   b"DigitalVault:recovery-key:v1")
+        meta["recovery_salt"] = base64.b64encode(recovery_salt).decode("ascii")
+        meta["recovery_wrapped_key"] = base64.b64encode(recovery_wrapped).decode("ascii")
+        self._write_meta_atomic(meta)
+        return recovery_key
+
+    def _write_meta_atomic(self, meta):
+        temp = self.meta_file.with_name(self.meta_file.name + ".tmp")
+        temp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, self.meta_file)
+
+    def recover_with_key(self, recovery_key, new_password):
+        meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+        if not meta.get("recovery_salt") or not meta.get("recovery_wrapped_key"):
+            raise ValueError("복구 키가 설정되어 있지 않습니다.")
+        recovery_salt = base64.b64decode(meta["recovery_salt"], validate=True)
+        master = decrypt(derive_key(recovery_key, recovery_salt),
+                         base64.b64decode(meta["recovery_wrapped_key"], validate=True),
+                         b"DigitalVault:recovery-key:v1")
+        if len(master) != 32:
+            raise ValueError("복구 키가 올바르지 않습니다.")
+        index = json.loads(decrypt(master, self.index_file.read_bytes(), INDEX_AAD))
+        new_salt = secrets.token_bytes(16)
+        meta["salt"] = base64.b64encode(new_salt).decode("ascii")
+        meta["kdf"] = KDF_PARAMS
+        meta["wrapped_key"] = base64.b64encode(
+            encrypt(derive_key(new_password, new_salt), master, WRAP_AAD)
+        ).decode("ascii")
+        self._write_meta_atomic(meta)
+        self.key, self.index = master, index
+        write_json(self.lock_file, {"tries": 0, "until": 0})
+        return True
+
+    def integrity_check(self):
+        print("\n===== 금고 무결성 검사 =====")
+        try:
+            meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+            if meta.get("format_version") != FORMAT_VERSION:
+                raise ValueError("지원하지 않는 금고 포맷입니다.")
+            index = json.loads(decrypt(self.key, self.index_file.read_bytes(), INDEX_AAD))
+            if not isinstance(index, dict):
+                raise ValueError("인덱스 형식이 올바르지 않습니다.")
+        except Exception as error:
+            print(f"[오류] 금고 메타데이터 또는 인덱스: {error}")
+            return False
+        failures = []
+        for file_id, info in index.items():
+            try:
+                path = self.docs / (file_id + ".bin")
+                aad = ("DigitalVault:document:v2:" + file_id).encode()
+                decrypt(self.key, path.read_bytes(), aad)
+                print(f"[정상] {info.get('name', file_id)}")
+            except Exception as error:
+                failures.append((info.get("name", file_id), str(error)))
+                print(f"[확인 필요] {info.get('name', file_id)}")
+        print(f"검사 문서: {len(index)}개 / 이상 항목: {len(failures)}개")
+        return not failures
+
+    def create_backup(self, destination):
+        destination = Path(destination).expanduser()
+        if destination.exists():
+            raise FileExistsError("기존 백업 파일을 덮어쓰지 않습니다.")
+        files = [self.meta_file, self.index_file] + sorted(self.docs.glob("*.bin"))
+        manifest = {}
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in files:
+                name = path.relative_to(self.folder).as_posix()
+                data = path.read_bytes()
+                manifest[name] = hashlib.sha256(data).hexdigest()
+                archive.writestr(name, data)
+            archive.writestr("backup_manifest.json", json.dumps({
+                "format": 1, "created_utc": datetime.now(timezone.utc).isoformat(),
+                "files": manifest
+            }, indent=2))
+        atomic_write(destination, buffer.getvalue())
+        return len(files)
+
+    @staticmethod
+    def restore_backup(archive_path, destination):
+        archive_path, destination = Path(archive_path), Path(destination)
+        if destination.exists():
+            raise FileExistsError("복원 대상 폴더가 이미 존재합니다.")
+        stage = destination.with_name(destination.name + ".restore-" + secrets.token_hex(6))
+        try:
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                names = archive.namelist()
+                if len(names) != len(set(names)):
+                    raise ValueError("백업에 중복 경로가 있습니다.")
+                if any(name.startswith("/") or ".." in Path(name).parts for name in names):
+                    raise ValueError("안전하지 않은 백업 경로입니다.")
+                manifest = json.loads(archive.read("backup_manifest.json"))
+                expected = manifest.get("files", {})
+                if "vault.json" not in expected or "index.bin" not in expected:
+                    raise ValueError("필수 금고 파일이 없습니다.")
+                stage.mkdir(parents=True)
+                for name, digest in expected.items():
+                    data = archive.read(name)
+                    if not secrets.compare_digest(hashlib.sha256(data).hexdigest(), digest):
+                        raise ValueError("백업 파일 해시가 일치하지 않습니다: " + name)
+                    target = stage / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+            stage.rename(destination)
+        except Exception:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+        return destination
+
+    def search_documents(self):
+        query = read_input("검색할 파일명: ").strip().casefold()
+        found = sorted((info["name"] for info in self.index.values()
+                        if query in info["name"].casefold()), key=str.casefold)
+        if not found:
+            print("검색 결과가 없습니다.")
+        else:
+            for number, name in enumerate(found, 1):
+                print(f"{number}. {name}")
+
+    def rename_document(self):
+        file_id = self.choose_id()
+        if not file_id:
+            return
+        old_name = self.index[file_id]["name"]
+        new_name = read_input("새 문서 이름: ").strip()
+        if not new_name or Path(new_name).name != new_name:
+            print("올바른 파일 이름을 입력하세요.")
+            return
+        ext = self.index[file_id]["extension"]
+        if Path(new_name).suffix.lower() != ext:
+            new_name = Path(new_name).stem + ext
+        if any(k != file_id and v["name"].casefold() == new_name.casefold()
+               for k, v in self.index.items()):
+            print("같은 이름의 문서가 이미 있습니다.")
+            return
+        self.index[file_id]["name"] = new_name
+        self.save_index()
+        print(f"문서 이름 변경: {old_name} -> {new_name}")
+
+    def show_vault_info(self):
+        total = sum((self.docs / (key + ".bin")).stat().st_size
+                    for key in self.index if (self.docs / (key + ".bin")).exists())
+        meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+        print("\n===== 금고 정보 =====")
+        print("암호화: AES-256-GCM")
+        print("키 파생: scrypt")
+        print(f"포맷 버전: {FORMAT_VERSION}")
+        print(f"저장 문서: {len(self.index)}개")
+        print(f"암호화 데이터 용량: {total:,} bytes")
+        print("복구 키: " + ("설정됨" if meta.get("recovery_wrapped_key") else "미설정"))
 
     def lock(self):
         self.key = None
@@ -743,7 +911,23 @@ def main():
         print("새 금고를 생성합니다.")
         vault.create(prompt_new_password())
 
-    while not vault.login(masked_password("비밀번호: ")):
+    if getattr(vault, "recovery_key_display", None):
+        print("\n[중요] 복구 키를 별도 장소에 보관하세요. 다시 표시되지 않습니다.")
+        print("복구 키:", vault.recovery_key_display)
+
+    while True:
+        entered = masked_password("비밀번호 (복구하려면 R 입력): ")
+        if entered.strip().lower() == "r":
+            try:
+                recovery = masked_password("복구 키: ")
+                vault.recover_with_key(recovery, prompt_new_password())
+                print("복구가 완료되었습니다.")
+                break
+            except Exception as error:
+                print("복구에 실패했습니다:", error)
+                return
+        if vault.login(entered):
+            break
         if vault.lock_status():
             return
 
@@ -751,10 +935,26 @@ def main():
 
     try:
         while vault.key is not None:
-            print("\n1. 문서 추가  2. 문서 목록  3. 문서 열기")
-            print("4. 문서 내보내기  5. 문서 삭제  6. 비밀번호 변경")
-            print("7. 마스터 키 재발급  0. 금고 잠금 및 종료")
-            print(f"(미사용 {IDLE_TIMEOUT_SECONDS // 60}분 후 자동 잠금)")
+            print("\n" + "=" * 54)
+            print("                 DigitalVault")
+            print("=" * 54)
+            print(" [ 문서 관리 ]")
+            print("  1. 문서 추가          2. 문서 목록")
+            print("  3. 문서 열기          4. 문서 내보내기")
+            print("  5. 문서 삭제          6. 문서 검색")
+            print("  7. 문서 이름 변경")
+            print("-" * 54)
+            print(" [ 보안 관리 ]")
+            print("  8. 비밀번호 변경      9. 마스터 키 재발급")
+            print(" 10. 복구 키 발급")
+            print("-" * 54)
+            print(" [ 금고 관리 ]")
+            print(" 11. 금고 백업          12. 금고 복원")
+            print(" 13. 무결성 검사        14. 금고 정보")
+            print("-" * 54)
+            print("  0. 금고 잠금 및 종료")
+            print(f"  ※ {IDLE_TIMEOUT_SECONDS // 60}분간 미사용 시 자동 잠금")
+            print("=" * 54)
 
             choice = timed_input("선택: ", IDLE_TIMEOUT_SECONDS)
             if choice is None:
@@ -775,16 +975,39 @@ def main():
             elif choice == "5":
                 vault.delete_document()
             elif choice == "6":
+                vault.search_documents()
+            elif choice == "7":
+                vault.rename_document()
+            elif choice == "8":
                 old = masked_password("현재 비밀번호: ")
                 new = prompt_new_password()
                 vault.change_password(old, new)
-            elif choice == "7":
-                answer = read_input("마스터 키를 재발급하고 모든 문서를 재암호화할까요? (y/n): ").strip().lower()
+            elif choice == "9":
+                answer = read_input("마스터 키를 재발급할까요? (y/n): ").strip().lower()
                 if answer == "y":
                     current = masked_password("현재 비밀번호: ")
                     vault.rotate_master_key(current)
                 else:
                     print("마스터 키 재발급을 취소했습니다.")
+            elif choice == "10":
+                current = masked_password("현재 비밀번호: ")
+                recovery = vault.setup_recovery_key(current)
+                print("\n새 복구 키 (한 번만 표시):")
+                print(recovery)
+                print("별도 장소에 안전하게 보관하세요.")
+            elif choice == "11":
+                destination = read_input("백업 파일 경로 (.zip): ").strip().strip('"')
+                if destination:
+                    print(f"백업 완료: {vault.create_backup(destination)}개 파일")
+            elif choice == "12":
+                archive = read_input("백업 ZIP 경로: ").strip().strip('"')
+                destination = read_input("새 복원 폴더 경로: ").strip().strip('"')
+                if archive and destination:
+                    print("복원 완료:", Vault.restore_backup(archive, destination))
+            elif choice == "13":
+                vault.integrity_check()
+            elif choice == "14":
+                vault.show_vault_info()
             else:
                 print("메뉴 번호를 다시 선택하세요.")
                 continue

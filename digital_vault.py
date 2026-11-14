@@ -106,18 +106,28 @@ def remaining_session_seconds():
     return max(0, int(SESSION_DEADLINE - time.monotonic() + 0.999))
 
 
-def timed_input(prompt, timeout):
-    """세션의 남은 자동 잠금 시간을 표시하며 입력을 기다립니다."""
+def timed_input(prompt, timeout, refresh=None):
+    """입력 대기 중 남은 자동 잠금 시간을 표시하고, 필요하면 화면을 갱신합니다."""
     global SESSION_DEADLINE
     chars = []
     if SESSION_DEADLINE is None:
         SESSION_DEADLINE = time.monotonic() + timeout
     last_rendered = 0
+    last_refresh_remaining = remaining_session_seconds()
 
     def render():
-        nonlocal last_rendered
+        nonlocal last_rendered, last_refresh_remaining
         remaining = remaining_session_seconds()
-        line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
+        if refresh is not None and remaining != last_refresh_remaining:
+            refresh(remaining)
+            last_refresh_remaining = remaining
+            last_rendered = 0
+
+        if refresh is None:
+            line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
+        else:
+            line = prompt + "".join(chars)
+
         sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
         sys.stdout.flush()
         last_rendered = len(line)
@@ -225,7 +235,6 @@ def format_duration(seconds):
 
 
 def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):
-    # 장식용 테두리와 과도한 중앙 정렬을 없애고, 기능별로 왼쪽 정렬한다.
     print()
     print("=" * 58)
     print("DigitalVault")
@@ -234,20 +243,33 @@ def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):
     print(f"자동 잠금까지 남은 시간: {format_duration(remaining_seconds)}")
     print("-" * 58)
     print("문서 관리")
-    print("  1  문서 추가          2  문서 목록")
-    print("  3  문서 열기          4  문서 내보내기")
-    print("  5  문서 삭제          6  문서 이름 변경")
+    print("  A  문서 추가          B  문서 목록")
+    print("  C  문서 열기          D  문서 내보내기")
+    print("  E  문서 삭제          F  문서 이름 변경")
     print()
     print("보안 관리")
-    print("  7  비밀번호 변경      8  마스터 키 재발급")
-    print("  9  복구 키 발급      10  보안 기록 확인")
+    print("  G  비밀번호 변경      H  마스터 키 재발급")
+    print("  I  복구 키 발급       J  보안 기록 확인")
     print()
     print("금고 관리")
-    print(" 11  금고 백업         12  백업 불러오기")
-    print(" 13  무결성 검사       14  금고 정보")
+    print("  K  금고 백업          L  백업 불러오기")
+    print("  M  무결성 검사        N  금고 정보")
     print("-" * 58)
     print("  0  금고 잠금 및 종료")
     print("=" * 58)
+
+
+def normalize_menu_choice(value):
+    return value.strip().upper()
+
+
+def continue_decision(value):
+    answer = value.strip().casefold()
+    if answer in {"y", "yes", "예", "ㅇ"}:
+        return "continue"
+    if answer in {"n", "no", "아니오", "아니요", "ㄴ"}:
+        return "exit"
+    return "invalid"
 
 
 def atomic_write(path: Path, data: bytes):
@@ -1268,31 +1290,37 @@ def main():
             first_menu = False
             show_main_menu(remaining_session_seconds(), len(vault.index))
 
-            choice = timed_input("선택: ", IDLE_TIMEOUT_SECONDS)
+            def refresh_menu(remaining):
+                clear_console()
+                show_main_menu(remaining, len(vault.index))
+
+            choice = timed_input(
+                "선택: ", IDLE_TIMEOUT_SECONDS, refresh=refresh_menu
+            )
             if choice is None:
                 vault.lock()
                 break
-            choice = choice.strip()
+            choice = normalize_menu_choice(choice)
             if choice == "0":
                 vault.lock()
                 break
-            elif choice == "1":
+            elif choice == "A":
                 vault.add_document()
-            elif choice == "2":
+            elif choice == "B":
                 vault.list_documents()
-            elif choice == "3":
+            elif choice == "C":
                 vault.open_document()
-            elif choice == "4":
+            elif choice == "D":
                 vault.export_document()
-            elif choice == "5":
+            elif choice == "E":
                 vault.delete_document()
-            elif choice == "6":
+            elif choice == "F":
                 vault.rename_document()
-            elif choice == "7":
+            elif choice == "G":
                 old = masked_password("현재 비밀번호: ")
                 new = prompt_new_password()
                 vault.change_password(old, new)
-            elif choice == "8":
+            elif choice == "H":
                 answer = read_input("마스터 키를 재발급할까요? (y/n): ").strip().lower()
                 if answer == "y":
                     current = masked_password("현재 비밀번호: ")
@@ -1303,15 +1331,15 @@ def main():
                     vault.rotate_master_key(current, recovery)
                 else:
                     print("마스터 키 재발급을 취소했습니다.")
-            elif choice == "9":
+            elif choice == "I":
                 current = masked_password("현재 비밀번호: ")
                 recovery = vault.setup_recovery_key(current)
                 print("\n새 복구 키 (한 번만 표시):")
                 print(recovery)
                 print("별도 장소에 안전하게 보관하세요.")
-            elif choice == "10":
+            elif choice == "J":
                 vault.show_security_log()
-            elif choice == "11":
+            elif choice == "K":
                 root = None
                 try:
                     root = Tk()
@@ -1331,7 +1359,7 @@ def main():
                     print(f"백업 완료: {vault.create_backup(destination)}개 파일")
                 else:
                     print("금고 백업을 취소했습니다.")
-            elif choice == "12":
+            elif choice == "L":
                 root = None
                 try:
                     root = Tk()
@@ -1359,25 +1387,27 @@ def main():
                     print("현재 USB 금고는 열린 상태로 유지됩니다.")
                 else:
                     print("백업 불러오기를 취소했습니다.")
-            elif choice == "13":
+            elif choice == "M":
                 vault.integrity_check()
-            elif choice == "14":
+            elif choice == "N":
                 vault.show_vault_info()
             else:
-                print("메뉴 번호를 다시 선택하세요.")
+                print("올바른 메뉴 문자(A~N)를 입력하세요.")
                 continue
 
-            while True:
-                answer = read_input(
-                    "\n작업을 계속하시겠습니까? (y/n): "
-                ).strip().lower()
-                if answer == "y":
-                    clear_console()
-                    break
-                if answer == "n":
-                    vault.lock()
-                    return
-                print("y 또는 n을 입력하세요.")
+            answer = read_input(
+                "\\n작업을 계속하시겠습니까? (Y/N): "
+            )
+            decision = continue_decision(answer)
+            if decision == "continue":
+                clear_console()
+                continue
+            if decision == "exit":
+                vault.lock()
+                return
+
+            print("Y 또는 N을 입력하세요. 메인 메뉴로 돌아갑니다.")
+            continue
 
     except TimeoutError as error:
         print(f"\n{error}")

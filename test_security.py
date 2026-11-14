@@ -456,7 +456,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertEqual(restored_contents, [expected_contents[0]])
             self.assertTrue(target.integrity_check())
 
-    def test_backup_merge_conflict_keep_and_replace(self):
+    def test_backup_merge_conflict_always_keeps_current_document(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = Vault(root / "source")
@@ -474,7 +474,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             target.add_document(target_doc)
             target_id = next(iter(target.index))
 
-            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "keep"})
+            target.merge_backup(backup, "source-password-123")
             self.assertEqual(target.last_merge_summary["skipped"], 1)
             current = decrypt(
                 target.key, (target.docs / (target_id + ".bin")).read_bytes(),
@@ -482,13 +482,13 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             )
             self.assertEqual(current, b"current version")
 
-            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "replace"})
-            self.assertEqual(target.last_merge_summary["replaced"], 1)
-            replaced = decrypt(
+            target.merge_backup(backup, "source-password-123")
+            self.assertEqual(target.last_merge_summary["skipped"], 1)
+            still_current = decrypt(
                 target.key, (target.docs / (target_id + ".bin")).read_bytes(),
                 ("DigitalVault:document:v2:" + target_id).encode()
             )
-            self.assertEqual(replaced, b"backup version")
+            self.assertEqual(still_current, b"current version")
             self.assertEqual(len(target.index), 1)
 
     def test_security_log_chain_detects_tampering_and_survives_key_rotation(self):

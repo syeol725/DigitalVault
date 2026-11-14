@@ -208,7 +208,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             root = Path(directory)
             source_vault = Vault(root / "source")
             source_vault.create("source-backup-password-123")
-            source_file = root / "shared.txt"
+            source_file = root / "from-backup.txt"
             source_file.write_text("from backup", encoding="utf-8")
             source_vault.add_document(source_file)
             backup = root / "source-backup.zip"
@@ -216,7 +216,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
 
             target_vault = Vault(root / "target")
             target_vault.create("target-password-456")
-            target_file = root / "shared.txt"
+            target_file = root / "already-here.txt"
             target_file.write_text("already in target", encoding="utf-8")
             target_vault.add_document(target_file)
             original_id = next(iter(target_vault.index))
@@ -228,7 +228,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertIn(original_id, target_vault.index)
             self.assertEqual(
                 {item["name"] for item in target_vault.index.values()},
-                {"shared.txt", "shared (복원 1).txt"},
+                {"already-here.txt", "from-backup.txt"},
             )
             self.assertTrue(target_vault.integrity_check())
 

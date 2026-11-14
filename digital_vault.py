@@ -262,12 +262,11 @@ def menu_timer_line(remaining_seconds):
 
 def update_menu_timer(remaining_seconds):
     """메뉴 전체를 다시 그리지 않고 타이머 행만 갱신합니다."""
-    if not getattr(sys.stdout, "isatty", lambda: False)():
+    if not getattr(sys.stdout, "isatty", lambda: False)() or os.name != "nt":
         return
 
     line = menu_timer_line(remaining_seconds)
 
-    if os.name == "nt":
         # Windows 콘솔 API를 사용해 현재 입력 커서를 보존한 채 타이머 행만 덮어씁니다.
         import ctypes
         from ctypes import wintypes
@@ -322,10 +321,6 @@ def update_menu_timer(remaining_seconds):
                 )
         finally:
             kernel32.SetConsoleCursorPosition(handle, original)
-    else:
-        # POSIX 터미널은 ANSI 커서 저장/복원으로 같은 행만 갱신합니다.
-        sys.stdout.write("\x1b[s\x1b[16A\r" + line + "\x1b[u")
-        sys.stdout.flush()
 
 
 def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):

@@ -1026,9 +1026,13 @@ class DigitalVaultApp:
         screen_width = window.winfo_screenwidth()
         screen_height = window.winfo_screenheight()
         window_width = min(1000, max(680, screen_width - 80))
-        window_height = min(720, max(480, screen_height - 100))
+        # 문서 수에 맞춰 창 높이를 정해 마지막 행 아래의 불필요한 빈 공간을 줄입니다.
+        # 10개를 넘으면 표 내부 스크롤로 나머지 문서를 확인합니다.
+        visible_rows = max(1, min(len(preview["documents"]), 10))
+        desired_height = 330 + visible_rows * 40
+        window_height = min(max(370, desired_height), max(370, screen_height - 100))
         window.geometry(f"{window_width}x{window_height}")
-        window.minsize(min(680, screen_width - 40), min(480, screen_height - 60))
+        window.minsize(min(680, screen_width - 40), min(360, screen_height - 60))
 
         card = tk.Frame(window, bg="#FFFFFF", padx=22, pady=18)
         card.pack(fill="both", expand=True, padx=14, pady=14)
@@ -1065,7 +1069,10 @@ class DigitalVaultApp:
         table_frame = tk.Frame(card, bg="#FFFFFF")
         table_frame.pack(fill="both", expand=True)
         columns = ("name", "extension", "size", "state", "action")
-        tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
+        tree = ttk.Treeview(
+            table_frame, columns=columns, show="headings",
+            height=visible_rows
+        )
         headings = {
             "name": ("백업 파일명", 280, "w"),
             "extension": ("형식", 80, "center"),

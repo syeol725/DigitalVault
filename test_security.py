@@ -64,10 +64,6 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                        {"name": "scrypt", "n": 2**20, "r": 8, "p": 1, "dklen": 32})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
     def test_recovery_key_resets_password_without_changing_documents(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -103,3 +99,7 @@ if __name__ == "__main__":
             self.assertTrue(restored.login("backup-password-123"))
             self.assertTrue(restored.integrity_check())
             self.assertEqual(len(restored.index), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

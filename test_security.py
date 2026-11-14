@@ -71,6 +71,10 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertIn("번호", rendered)
             self.assertIn("파일명", rendered)
             self.assertIn("암호화 크기", rendered)
+            rows = rendered.splitlines()
+            header = next(line for line in rows if "번호" in line and "파일명" in line)
+            data = next(line for line in rows if "Alpha 보고서.docx" in line)
+            self.assertEqual(display_width(header), display_width(data))
 
     def test_long_document_name_is_truncated_by_display_width(self):
         from digital_vault import display_width, truncate_display

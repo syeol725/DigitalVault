@@ -219,6 +219,20 @@ def display_width(value):
     )
 
 
+def truncate_display(value, width):
+    """한글·영문 표시 폭을 고려해 표 셀 안에서 파일명을 줄입니다."""
+    value = str(value)
+    if display_width(value) <= width:
+        return value
+
+    shortened = ""
+    for char in value:
+        if display_width(shortened + char + "…") > width:
+            break
+        shortened += char
+    return shortened + "…"
+
+
 def center_display(value, width):
     value = str(value)
     padding = max(0, width - display_width(value))
@@ -239,13 +253,83 @@ def format_duration(seconds):
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
+def menu_timer_line(remaining_seconds):
+    """메인 메뉴의 타이머 행을 고정된 표시 폭으로 만듭니다."""
+    return pad_display(
+        f"자동 잠금까지 남은 시간: {format_duration(remaining_seconds)}", 58
+    )
+
+
+def update_menu_timer(remaining_seconds):
+    """Windows 콘솔에서 메뉴 전체가 아닌 타이머 행만 갱신합니다."""
+    if not getattr(sys.stdout, "isatty", lambda: False)() or os.name != "nt":
+        return
+
+    line = menu_timer_line(remaining_seconds)
+
+    # Windows 콘솔 API로 현재 입력 커서를 보존하면서 타이머 행만 덮어씁니다.
+    import ctypes
+    from ctypes import wintypes
+
+    class COORD(ctypes.Structure):
+        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+    class SMALL_RECT(ctypes.Structure):
+        _fields_ = [
+            ("Left", wintypes.SHORT), ("Top", wintypes.SHORT),
+            ("Right", wintypes.SHORT), ("Bottom", wintypes.SHORT),
+        ]
+
+    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", COORD),
+            ("dwCursorPosition", COORD),
+            ("wAttributes", wintypes.WORD),
+            ("srWindow", SMALL_RECT),
+            ("dwMaximumWindowSize", COORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+    kernel32.GetStdHandle.restype = wintypes.HANDLE
+    kernel32.GetConsoleScreenBufferInfo.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)
+    ]
+    kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
+    kernel32.SetConsoleCursorPosition.argtypes = [wintypes.HANDLE, COORD]
+    kernel32.SetConsoleCursorPosition.restype = wintypes.BOOL
+    kernel32.WriteConsoleW.argtypes = [
+        wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+    ]
+    kernel32.WriteConsoleW.restype = wintypes.BOOL
+
+    handle = kernel32.GetStdHandle(0xFFFFFFF5)  # STD_OUTPUT_HANDLE
+    info = CONSOLE_SCREEN_BUFFER_INFO()
+    if not handle or not kernel32.GetConsoleScreenBufferInfo(
+        handle, ctypes.byref(info)
+    ):
+        return
+
+    original = info.dwCursorPosition
+    timer_position = COORD(0, max(0, original.Y - 16))
+    written = wintypes.DWORD()
+    try:
+        if kernel32.SetConsoleCursorPosition(handle, timer_position):
+            kernel32.WriteConsoleW(
+                handle, ctypes.c_wchar_p(line), len(line), ctypes.byref(written), None
+            )
+    finally:
+        kernel32.SetConsoleCursorPosition(handle, original)
+
+
 def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):
     print()
     print("=" * 58)
     print("DigitalVault")
     print("=" * 58)
     print(f"현재 금고: {document_count}개 문서")
-    print(f"자동 잠금까지 남은 시간: {format_duration(remaining_seconds)}")
+    print(menu_timer_line(remaining_seconds))
     print("-" * 58)
     print("문서 관리")
     print("  A  문서 추가          B  문서 목록")
@@ -693,43 +777,54 @@ class Vault:
 
     def list_documents(self):
         if not self.index:
-            print("저장된 문서가 없습니다.")
+            print("\n===== 저장된 문서 목록 =====")
+            print("\n저장된 문서가 없습니다.")
+            print("총 문서: 0개 | 총 암호화 크기: 0 B")
             return
 
-        name_width = 36
+        number_width = 4
+        name_width = 38
         extension_width = 8
         size_width = 16
-        table_width = 4 + 2 + name_width + 2 + extension_width + 2 + size_width
+        table_width = (
+            number_width + 2 + name_width + 2 + extension_width + 2 + size_width
+        )
 
-        print("\n===== 저장된 문서 목록 =====\n")
+        print("\n===== 저장된 문서 목록 =====")
         print(
-            f"{pad_display('번호', 4, 'right')}  "
+            f"{pad_display('번호', number_width, 'right')}  "
             f"{pad_display('파일명', name_width)}  "
             f"{pad_display('형식', extension_width)}  "
             f"{pad_display('암호화 크기', size_width, 'right')}"
         )
         print("-" * table_width)
 
-        items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
+        items = sorted(
+            self.index.items(),
+            key=lambda item: item[1]["name"].casefold()
+        )
+        total_size = 0
+
         for number, (file_id, info) in enumerate(items, 1):
             path = self.docs / (file_id + ".bin")
             size = path.stat().st_size if path.exists() else 0
-            name = info["name"]
-            if display_width(name) > name_width:
-                shortened = name
-                while shortened and display_width(shortened + "...") > name_width:
-                    shortened = shortened[:-1]
-                name = shortened + "..."
+            total_size += size
+
+            name = truncate_display(info["name"], name_width)
+            extension = info["extension"].lstrip(".").upper()
             size_text = f"{size:,} B"
             print(
-                f"{pad_display(number, 4, 'right')}  "
+                f"{pad_display(number, number_width, 'right')}  "
                 f"{pad_display(name, name_width)}  "
-                f"{pad_display(info['extension'], extension_width)}  "
+                f"{pad_display(extension, extension_width)}  "
                 f"{pad_display(size_text, size_width, 'right')}"
             )
 
         print("-" * table_width)
-        print(f"\n총 문서: {len(items)}개")
+        print(
+            f"총 문서: {len(items)}개"
+            f"  |  총 암호화 크기: {total_size:,} B"
+        )
 
     def choose_id(self):
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
@@ -1020,10 +1115,9 @@ class Vault:
         destination = Path(destination).expanduser()
         if destination.exists():
             raise FileExistsError("기존 백업 파일을 덮어쓰지 않습니다.")
+        # 백업에는 복원에 필요한 금고 메타데이터, 암호화 인덱스,
+        # 암호화된 문서만 포함합니다. 보안 이벤트 로그는 별도 운영 기록이므로 제외합니다.
         files = [self.meta_file, self.index_file] + sorted(self.docs.glob("*.bin"))
-        audit_path = self.folder / "security.log"
-        if audit_path.exists():
-            files.append(audit_path)
         manifest = {}
         buffer = BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -1296,8 +1390,7 @@ def main():
             show_main_menu(remaining_session_seconds(), len(vault.index))
 
             def refresh_menu(remaining):
-                clear_console()
-                show_main_menu(remaining, len(vault.index))
+                update_menu_timer(remaining)
 
             choice = timed_input(
                 "선택: ", IDLE_TIMEOUT_SECONDS, refresh=refresh_menu

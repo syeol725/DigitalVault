@@ -35,6 +35,44 @@ class DigitalVaultSecurityTests(unittest.TestCase):
         self.assertIn("0  금고 잠금 및 종료", rendered)
         self.assertNotIn("선택:", rendered)
 
+    def test_menu_timer_line_has_fixed_display_width(self):
+        from digital_vault import display_width, menu_timer_line
+        self.assertEqual(display_width(menu_timer_line(299)), 58)
+        self.assertIn("04:59", menu_timer_line(299))
+
+    def test_document_list_is_aligned_sorted_and_shows_total_size(self):
+        from digital_vault import Vault
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            docs = root / "documents"
+            docs.mkdir()
+            (docs / "id-a.bin").write_bytes(b"12345")
+            (docs / "id-b.bin").write_bytes(b"1234567")
+
+            vault = Vault.__new__(Vault)
+            vault.docs = docs
+            vault.index = {
+                "id-a": {"name": "zeta.pdf", "extension": ".pdf"},
+                "id-b": {"name": "Alpha 보고서.docx", "extension": ".docx"},
+            }
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                vault.list_documents()
+
+            rendered = output.getvalue()
+            self.assertLess(rendered.index("Alpha 보고서.docx"), rendered.index("zeta.pdf"))
+            self.assertIn("DOCX", rendered)
+            self.assertIn("PDF", rendered)
+            self.assertIn("총 문서: 2개", rendered)
+            self.assertIn("총 암호화 크기: 12 B", rendered)
+
+    def test_long_document_name_is_truncated_by_display_width(self):
+        from digital_vault import display_width, truncate_display
+        shortened = truncate_display("아주 긴 문서 파일 이름 보고서.pdf", 12)
+        self.assertLessEqual(display_width(shortened), 12)
+        self.assertTrue(shortened.endswith("…"))
+
+
     def test_authenticated_encryption_detects_tampering(self):
         key = derive_key("test-password-123", b"0123456789abcdef")
         sealed = encrypt(key, b"private payload", b"test-context")
@@ -150,6 +188,30 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             reopened = Vault(root / "target")
             self.assertTrue(reopened.login("target-password-456"))
             self.assertEqual(len(reopened.index), 2)
+
+    def test_backup_contains_only_required_vault_data(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("backup-password-123")
+            source = root / "backup.txt"
+            source.write_text("backup payload", encoding="utf-8")
+            vault.add_document(source)
+            (vault.folder / "security.log").write_text("audit record", encoding="ascii")
+
+            backup = root / "vault-backup.zip"
+            vault.create_backup(backup)
+
+            with zipfile.ZipFile(backup, "r") as archive:
+                names = set(archive.namelist())
+            self.assertIn("vault.json", names)
+            self.assertIn("index.bin", names)
+            self.assertIn("backup_manifest.json", names)
+            self.assertIn("documents/" + next(iter(vault.index)) + ".bin", names)
+            self.assertNotIn("security.log", names)
+            self.assertFalse(any(name.lower().endswith(("readme.md", ".exe", ".py"))
+                                 for name in names))
 
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:

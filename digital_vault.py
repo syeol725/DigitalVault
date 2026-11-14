@@ -245,17 +245,17 @@ def masked_password(prompt, timeout=None):
                 if not ready:
                     continue
                 raw = os.read(fd, 1)
-                if raw in (b"\\r", b"\\n"):
+                if raw in (bytes([13]), bytes([10])):
                     print()
                     return "".join(chars)
-                if raw == b"\\x03":
+                if raw == bytes([3]):
                     raise KeyboardInterrupt
-                if raw == b"\\x04":
+                if raw == bytes([4]):
                     raise EOFError
-                if raw in (b"\\x7f", b"\\x08"):
+                if raw in (bytes([13]), bytes([10])):
                     if chars:
                         chars.pop()
-                        sys.stdout.write("\\b \\b")
+                        sys.stdout.write(chr(8) + " " + chr(8))
                         sys.stdout.flush()
                     decoder.reset()
                     continue

@@ -561,6 +561,8 @@ class DigitalVaultApp:
 
     def _toggle_tree_selection(self, event):
         """Ctrl/Shift 없이 클릭할 때마다 해당 문서의 선택 상태를 전환합니다."""
+        # 이 핸들러는 기본 Treeview 클릭 동작을 막으므로 전역 이벤트 대신 직접 기록합니다.
+        self._on_activity(event)
         file_id = self.tree.identify_row(event.y)
         if not file_id:
             return "break"

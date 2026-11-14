@@ -346,7 +346,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 target.inspect_backup(backup, "wrong-password-123")
 
-    def test_backup_preview_explains_invalid_or_duplicate_document_names(self):
+    def test_backup_preview_explains_invalid_document_names(self):
         import tempfile
 
         cases = [

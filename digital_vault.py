@@ -19,6 +19,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 EXTENSIONS = {".pdf", ".docx", ".txt", ".pptx", ".xlsx", ".jpg", ".jpeg", ".png"}
 MAX_TRIES = 5
 LOCK_SECONDS = 60
+FORMAT_VERSION = 2
+KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
+KDF_MAXMEM = 256 * 1024 * 1024
+IDLE_TIMEOUT_SECONDS = 300
+WRAP_AAD = b"DigitalVault:master-key:v2"
+INDEX_AAD = b"DigitalVault:index:v2"
 
 
 # ---------- 논리 게이트 ----------
@@ -62,26 +68,62 @@ def write_json(path, data):
     os.replace(temp, path)
 
 
-def derive_key(password, salt):
-    return hashlib.scrypt(
-        password.encode("utf-8"),
-        salt=salt,
-        n=2**14,
-        r=8,
-        p=1,
-        dklen=32,
-    )
+def derive_key(password, salt, params=None):
+    params = params or KDF_PARAMS
+    if params.get("name") != "scrypt":
+        raise ValueError("지원하지 않는 키 파생 알고리즘입니다.")
+    n, r, p, dklen = int(params["n"]), int(params["r"]), int(params["p"]), int(params["dklen"])
+    if n != 2**17 or r != 8 or p != 1 or dklen != 32:
+        raise ValueError("유효하지 않은 KDF 설정입니다.")
+    return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p,
+                          dklen=dklen, maxmem=KDF_MAXMEM)
 
 
-def encrypt(key, data):
+def encrypt(key, data, aad=None):
     nonce = secrets.token_bytes(12)
-    return nonce + AESGCM(key).encrypt(nonce, data, None)
+    return nonce + AESGCM(key).encrypt(nonce, data, aad)
 
 
-def decrypt(key, data):
+def decrypt(key, data, aad=None):
     if len(data) < 13:
         raise ValueError("암호화 데이터가 손상되었습니다.")
-    return AESGCM(key).decrypt(data[:12], data[12:], None)
+    return AESGCM(key).decrypt(data[:12], data[12:], aad)
+
+
+def timed_input(prompt, timeout):
+    print(prompt, end="", flush=True)
+    deadline, chars = time.monotonic() + timeout, []
+    if os.name == "nt":
+        import msvcrt
+        while time.monotonic() < deadline:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\\r", "\\n"):
+                    print(); return "".join(chars)
+                if ch == "\\003": raise KeyboardInterrupt
+                if ch == "\\b":
+                    if chars: chars.pop(); print("\\b \\b", end="", flush=True)
+                elif ch.isprintable(): chars.append(ch); print(ch, end="", flush=True)
+            else: time.sleep(0.05)
+    else:
+        import select, termios, tty
+        if not sys.stdin.isatty(): return input()
+        fd, old = sys.stdin.fileno(), termios.tcgetattr(sys.stdin.fileno())
+        try:
+            tty.setcbreak(fd)
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if not ready: continue
+                ch = sys.stdin.read(1)
+                if ch in ("\\r", "\\n"):
+                    print(); return "".join(chars)
+                if ch in ("\\x7f", "\\b"):
+                    if chars: chars.pop(); print("\\b \\b", end="", flush=True)
+                elif ch == "\\x03": raise KeyboardInterrupt
+                elif ch.isprintable(): chars.append(ch); print(ch, end="", flush=True)
+        finally: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    print("\\n입력 대기 시간이 초과되어 금고를 잠급니다.")
+    return None
 
 
 def atomic_write(path: Path, data: bytes):
@@ -201,6 +243,10 @@ class Vault:
         self.lock_file = self.folder / "login_state.json"
         self.key = None
         self.index = {}
+        self.temp_prefix = "digitalvault_" + hashlib.sha256(
+            str(self.folder.resolve()).encode("utf-8")
+        ).hexdigest()[:12] + "_"
+        self.cleanup_stale_temp_files()
 
     @property
     def exists(self):
@@ -213,11 +259,13 @@ class Vault:
         salt = secrets.token_bytes(16)
         master = secrets.token_bytes(32)
         wrap_key = derive_key(password, salt)
-        wrapped = encrypt(wrap_key, master)
+        wrapped = encrypt(wrap_key, master, WRAP_AAD)
 
         write_json(
             self.meta_file,
             {
+                "format_version": FORMAT_VERSION,
+                "kdf": KDF_PARAMS,
                 "salt": base64.b64encode(salt).decode("ascii"),
                 "wrapped_key": base64.b64encode(wrapped).decode("ascii"),
             },
@@ -242,9 +290,11 @@ class Vault:
 
         try:
             meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+            if meta.get("format_version") != FORMAT_VERSION:
+                raise ValueError("지원하지 않는 금고 포맷입니다.")
             salt = base64.b64decode(meta["salt"], validate=True)
             wrapped = base64.b64decode(meta["wrapped_key"], validate=True)
-            master = decrypt(derive_key(password, salt), wrapped)
+            master = decrypt(derive_key(password, salt, meta.get("kdf")), wrapped, WRAP_AAD)
             if len(master) != 32:
                 raise ValueError("잘못된 금고 키입니다.")
         except Exception:
@@ -274,12 +324,53 @@ class Vault:
         if not self.index_file.exists():
             return {}
         return json.loads(
-            decrypt(self.key, self.index_file.read_bytes()).decode("utf-8")
+            decrypt(self.key, self.index_file.read_bytes(), INDEX_AAD).decode("utf-8")
         )
 
     def save_index(self):
         data = json.dumps(self.index, ensure_ascii=False).encode("utf-8")
-        atomic_write(self.index_file, encrypt(self.key, data))
+        atomic_write(self.index_file, encrypt(self.key, data, INDEX_AAD))
+
+    def cleanup_stale_temp_files(self):
+        cutoff = time.time() - 24 * 60 * 60
+        for item in Path(tempfile.gettempdir()).glob(self.temp_prefix + "*"):
+            try:
+                if item.is_dir() and item.stat().st_mtime < cutoff:
+                    shutil.rmtree(item, ignore_errors=True)
+            except OSError:
+                pass
+
+    def rotate_master_key(self):
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 실행할 수 있습니다.")
+        new_key = secrets.token_bytes(32)
+        stage = self.folder / (".rotation-" + secrets.token_hex(8))
+        staged_docs, backup_docs = stage / "documents", self.folder / (".documents-backup-" + secrets.token_hex(8))
+        staged_docs.mkdir(parents=True)
+        old_index = stage / "index.old"
+        try:
+            for file_id in self.index:
+                aad = ("DigitalVault:document:v2:" + file_id).encode()
+                plain = decrypt(self.key, (self.docs / (file_id + ".bin")).read_bytes(), aad)
+                atomic_write(staged_docs / (file_id + ".bin"), encrypt(new_key, plain, aad))
+            payload = json.dumps(self.index, ensure_ascii=False).encode("utf-8")
+            staged_index = stage / "index.new"
+            atomic_write(staged_index, encrypt(new_key, payload, INDEX_AAD))
+            if self.index_file.exists(): shutil.copy2(self.index_file, old_index)
+            self.docs.rename(backup_docs)
+            try:
+                staged_docs.rename(self.docs)
+                os.replace(staged_index, self.index_file)
+            except Exception:
+                if self.docs.exists(): shutil.rmtree(self.docs, ignore_errors=True)
+                backup_docs.rename(self.docs)
+                if old_index.exists(): os.replace(old_index, self.index_file)
+                raise
+            shutil.rmtree(backup_docs, ignore_errors=True)
+            self.key = new_key
+            print("마스터 키를 재발급하고 모든 문서를 재암호화했습니다.")
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
 
     def add_document(self, source=None):
         if not source:
@@ -317,7 +408,8 @@ class Vault:
 
         try:
             file_id = secrets.token_hex(12)
-            encrypted = encrypt(self.key, source.read_bytes())
+            encrypted = encrypt(self.key, source.read_bytes(),
+                                 ("DigitalVault:document:v2:" + file_id).encode())
             atomic_write(self.docs / (file_id + ".bin"), encrypted)
 
             self.index[file_id] = {
@@ -408,6 +500,7 @@ class Vault:
             data = decrypt(
                 self.key,
                 (self.docs / (file_id + ".bin")).read_bytes(),
+                ("DigitalVault:document:v2:" + file_id).encode(),
             )
             atomic_write(destination, data)
             print(f"문서 내보내기 완료: {destination}")
@@ -428,9 +521,13 @@ class Vault:
                 (self.docs / (file_id + ".bin")).read_bytes(),
             )
 
-            temp_dir = Path(tempfile.mkdtemp(prefix="digital_vault_"))
-            temp_file = temp_dir / info["name"]
+            temp_dir = Path(tempfile.mkdtemp(prefix=self.temp_prefix))
+            try: os.chmod(temp_dir, 0o700)
+            except OSError: pass
+            temp_file = temp_dir / Path(info["name"]).name
             temp_file.write_bytes(data)
+            try: os.chmod(temp_file, 0o600)
+            except OSError: pass
 
             os.startfile(str(temp_file))
             input(
@@ -500,10 +597,12 @@ class Vault:
             master = decrypt(derive_key(old_password, salt), wrapped)
 
             new_salt = secrets.token_bytes(16)
-            new_wrapped = encrypt(derive_key(new_password, new_salt), master)
+            new_wrapped = encrypt(derive_key(new_password, new_salt), master, WRAP_AAD)
             write_json(
                 self.meta_file,
                 {
+                    "format_version": FORMAT_VERSION,
+                    "kdf": KDF_PARAMS,
                     "salt": base64.b64encode(new_salt).decode("ascii"),
                     "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
                 },
@@ -551,9 +650,14 @@ def main():
         while vault.key is not None:
             print("\n1. 문서 추가  2. 문서 목록  3. 문서 열기")
             print("4. 문서 내보내기  5. 문서 삭제  6. 비밀번호 변경")
-            print("0. 금고 잠금 및 종료")
+            print("7. 마스터 키 재발급  0. 금고 잠금 및 종료")
+            print(f"(미사용 {IDLE_TIMEOUT_SECONDS // 60}분 후 자동 잠금)")
 
-            choice = input("선택: ").strip()
+            choice = timed_input("선택: ", IDLE_TIMEOUT_SECONDS)
+            if choice is None:
+                vault.lock()
+                break
+            choice = choice.strip()
             if choice == "0":
                 vault.lock()
                 break
@@ -571,6 +675,10 @@ def main():
                 old = masked_password("현재 비밀번호: ")
                 new = prompt_new_password()
                 vault.change_password(old, new)
+            elif choice == "7":
+                answer = input("마스터 키를 재발급하고 모든 문서를 재암호화할까요? (y/n): ").strip().lower()
+                if answer == "y": vault.rotate_master_key()
+                else: print("마스터 키 재발급을 취소했습니다.")
             else:
                 print("메뉴 번호를 다시 선택하세요.")
                 continue

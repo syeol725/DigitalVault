@@ -1073,21 +1073,50 @@ class DigitalVaultApp:
 
     def _lock(self, show_notice=False):
         self._cancel_idle_lock()
+        backup_result = None
+        backup_error = None
         if self.vault and self.vault.key is not None:
+            try:
+                backup_result = self.vault.create_automatic_backup()
+            except Exception as error:
+                backup_error = str(error)
             self.vault.lock()
         self.vault = None
         self._clear()
         self._login_screen()
-        if show_notice:
+        if backup_error:
             self._show_message(
-                "info", "자동 잠금",
-                "5분 동안 사용하지 않아 금고를 자동으로 잠갔습니다.\n다시 사용하려면 비밀번호를 입력하세요.",
+                "warning", "자동 백업 실패",
+                "금고는 잠겼지만 자동 백업을 만들지 못했습니다.\n"
+                f"오류: {backup_error}",
                 parent=self.root
+            )
+        elif backup_result:
+            message = (
+                f"자동 백업을 저장했습니다.\n{backup_result['path']}\n"
+                "보관 기간: 7일"
+            )
+            if show_notice:
+                message = (
+                    "5분 동안 사용하지 않아 금고를 자동으로 잠갔습니다.\n"
+                    + message
+                )
+            self._show_message(
+                "info", "금고 잠금 완료", message, parent=self.root
             )
 
     def _close(self):
         self._cancel_idle_lock()
         if self.vault and self.vault.key is not None:
+            try:
+                self.vault.create_automatic_backup()
+            except Exception as error:
+                self._show_message(
+                    "warning", "자동 백업 실패",
+                    "금고를 종료하지만 자동 백업을 만들지 못했습니다.\n"
+                    f"오류: {error}",
+                    parent=self.root
+                )
             self.vault.lock()
         self.root.destroy()
 

@@ -20,9 +20,9 @@ class DigitalVaultApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("DigitalVault")
-        self.root.geometry("1080x720")
-        self.root.minsize(900, 600)
-        self.root.configure(bg="#F4F6FA")
+        self.root.geometry("1180x780")
+        self.root.minsize(980, 660)
+        self.root.configure(bg="#F5F7FB")
         self.vault = None
         self._style()
         self._login_screen()
@@ -34,26 +34,28 @@ class DigitalVaultApp:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Treeview", rowheight=38, font=("Malgun Gothic", 10),
+        style.configure("Treeview", rowheight=42, font=("Malgun Gothic", 10),
                         background="#FFFFFF", fieldbackground="#FFFFFF",
-                        foreground="#202938", borderwidth=0)
+                        foreground="#202938", borderwidth=0, relief="flat")
         style.configure("Treeview.Heading", font=("Malgun Gothic", 9, "bold"),
-                        background="#EEF1F6", foreground="#526078", relief="flat")
+                        background="#F2F5FA", foreground="#526078", relief="flat", padding=(12, 12))
         style.map("Treeview", background=[("selected", "#E4ECFF")],
                   foreground=[("selected", "#173B83")])
-        style.configure("TButton", font=("Malgun Gothic", 9), padding=(12, 8))
+        style.configure("TButton", font=("Malgun Gothic", 9), padding=(14, 10),
+                        background="#FFFFFF", foreground="#344054", borderwidth=0, relief="flat")
+        style.map("TButton", background=[("active", "#EDF2FA"), ("pressed", "#E4EAF4")])
         style.configure("Accent.TButton", font=("Malgun Gothic", 9, "bold"),
-                        padding=(14, 9), background="#315ECA", foreground="#FFFFFF")
+                        padding=(16, 11), background="#315ECA", foreground="#FFFFFF", borderwidth=0)
         style.map("Accent.TButton", background=[("active", "#244DAA")])
         style.configure("TLabel", font=("Malgun Gothic", 10), background="#FFFFFF",
                         foreground="#202938")
         style.configure("Muted.TLabel", foreground="#738096", background="#FFFFFF")
         style.configure("Title.TLabel", font=("Malgun Gothic", 20, "bold"))
         style.configure("Card.TFrame", background="#FFFFFF")
-        style.configure("Sidebar.TFrame", background="#202B3C")
-        style.configure("Sidebar.TButton", background="#202B3C", foreground="#E8EDF5",
-                        borderwidth=0, anchor="w", padding=(18, 12))
-        style.map("Sidebar.TButton", background=[("active", "#33445D")])
+        style.configure("Sidebar.TFrame", background="#182436")
+        style.configure("Sidebar.TButton", background="#182436", foreground="#D8E1EF",
+                        borderwidth=0, anchor="w", padding=(18, 13), font=("Malgun Gothic", 9))
+        style.map("Sidebar.TButton", background=[("active", "#2B3B52")], foreground=[("active", "#FFFFFF")])
 
     def _center(self, window, width=460, height=360):
         window.update_idletasks()
@@ -62,7 +64,7 @@ class DigitalVaultApp:
         window.geometry(f"{width}x{height}+{x}+{y}")
 
     def _login_screen(self):
-        self.login_frame = tk.Frame(self.root, bg="#F4F6FA")
+        self.login_frame = tk.Frame(self.root, bg="#F5F7FB")
         self.login_frame.pack(fill="both", expand=True)
         card = tk.Frame(self.login_frame, bg="#FFFFFF", padx=38, pady=34,
                         highlightthickness=1, highlightbackground="#E2E7EF")
@@ -180,12 +182,14 @@ class DigitalVaultApp:
             messagebox.showerror("복구 실패", str(error), parent=self.root)
 
     def _clear(self):
+        # 이전 화면의 Treeview 위젯 참조가 남으면 재로그인 시 TclError가 발생한다.
+        self.tree = None
         for child in self.root.winfo_children():
             child.destroy()
 
     def _dashboard(self):
         self._clear()
-        shell = tk.Frame(self.root, bg="#F4F6FA")
+        shell = tk.Frame(self.root, bg="#F5F7FB")
         shell.pack(fill="both", expand=True)
         sidebar = ttk.Frame(shell, style="Sidebar.TFrame", width=220)
         sidebar.pack(side="left", fill="y")
@@ -208,7 +212,7 @@ class DigitalVaultApp:
         ttk.Button(sidebar, text="잠금 및 종료", style="Sidebar.TButton",
                    command=self._lock).pack(side="bottom", fill="x", padx=8, pady=18)
 
-        main = tk.Frame(shell, bg="#F4F6FA")
+        main = tk.Frame(shell, bg="#F5F7FB")
         main.pack(side="left", fill="both", expand=True)
         header = tk.Frame(main, bg="#FFFFFF", padx=30, pady=22)
         header.pack(fill="x")
@@ -216,18 +220,17 @@ class DigitalVaultApp:
                  font=("Malgun Gothic", 20, "bold")).pack(side="left")
         tk.Label(header, text="잠금 해제됨", bg="#E7F6EE", fg="#21834D",
                  font=("Malgun Gothic", 9, "bold"), padx=10, pady=5).pack(side="right")
-        content = tk.Frame(main, bg="#F4F6FA", padx=28, pady=24)
+        content = tk.Frame(main, bg="#F5F7FB", padx=28, pady=24)
         content.pack(fill="both", expand=True)
 
-        stats = tk.Frame(content, bg="#F4F6FA")
+        stats = tk.Frame(content, bg="#F5F7FB")
         stats.pack(fill="x", pady=(0, 20))
         self.count_label = self._stat_card(stats, "저장된 문서", "0개")
         self.size_label = self._stat_card(stats, "암호화 용량", "0 B")
-        self._refresh_documents()
 
-        toolbar = tk.Frame(content, bg="#F4F6FA")
+        toolbar = tk.Frame(content, bg="#F5F7FB")
         toolbar.pack(fill="x", pady=(0, 12))
-        tk.Label(toolbar, text="저장된 파일", bg="#F4F6FA", fg="#202938",
+        tk.Label(toolbar, text="저장된 파일", bg="#F5F7FB", fg="#202938",
                  font=("Malgun Gothic", 12, "bold")).pack(side="left")
         ttk.Button(toolbar, text="이름 변경", command=self._rename_document).pack(side="right", padx=(6, 0))
         ttk.Button(toolbar, text="삭제", command=self._delete_document).pack(side="right", padx=(6, 0))
@@ -251,6 +254,28 @@ class DigitalVaultApp:
         scrollbar.pack(side="right", fill="y")
         self.tree.bind("<Double-1>", lambda _e: self._open_document())
         self._refresh_documents()
+
+    def _tool_dialog(self, title, actions):
+        window = tk.Toplevel(self.root)
+        window.title(title)
+        window.configure(bg="#F5F7FB")
+        window.transient(self.root)
+        window.resizable(False, False)
+        body = tk.Frame(window, bg="#FFFFFF", padx=24, pady=22,
+                        highlightthickness=1, highlightbackground="#E5EAF2")
+        body.pack(fill="both", expand=True, padx=14, pady=14)
+        tk.Label(body, text=title, bg="#FFFFFF", fg="#202938",
+                 font=("Malgun Gothic", 16, "bold")).pack(anchor="w", pady=(0, 16))
+        for label, command in actions:
+            ttk.Button(body, text=label, command=lambda fn=command, w=window: (w.destroy(), fn()),
+                       style="Accent.TButton").pack(fill="x", pady=4)
+        ttk.Button(body, text="닫기", command=window.destroy).pack(fill="x", pady=(12, 0))
+        window.update_idletasks()
+        width, height = 360, 150 + len(actions) * 54
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        window.geometry(f"{width}x{height}+{max(0,x)}+{max(0,y)}")
+        window.grab_set()
 
     def _stat_card(self, parent, title, value):
         card = tk.Frame(parent, bg="#FFFFFF", padx=20, pady=15,
@@ -337,9 +362,6 @@ class DigitalVaultApp:
         if not destination:
             return
         target = Path(destination)
-        if target.exists() and not messagebox.askyesno("덮어쓰기 확인",
-                "같은 이름의 파일이 있습니다. 덮어쓸까요?", parent=self.root):
-            return
         try:
             data = decrypt(self.vault.key,
                 (self.vault.docs / (file_id + ".bin")).read_bytes(),
@@ -431,12 +453,12 @@ class DigitalVaultApp:
         self._refresh_documents()
 
     def _security_menu(self):
-        choice = tk.Menu(self.root, tearoff=False)
-        choice.add_command(label="비밀번호 변경", command=self._change_password)
-        choice.add_command(label="마스터 키 재발급", command=self._rotate_key)
-        choice.add_command(label="복구 키 발급", command=self._issue_recovery)
-        choice.add_command(label="보안 기록", command=self._show_log)
-        choice.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        self._tool_dialog("보안 관리", [
+            ("비밀번호 변경", self._change_password),
+            ("마스터 키 재발급", self._rotate_key),
+            ("복구 키 발급", self._issue_recovery),
+            ("보안 기록", self._show_log),
+        ])
 
     def _change_password(self):
         old = simpledialog.askstring("비밀번호 변경", "현재 비밀번호:", show="●", parent=self.root)
@@ -497,10 +519,10 @@ class DigitalVaultApp:
         self._text_window("보안 기록", output.getvalue())
 
     def _backup_menu(self):
-        menu = tk.Menu(self.root, tearoff=False)
-        menu.add_command(label="금고 백업 만들기", command=self._create_backup)
-        menu.add_command(label="백업을 현재 금고에 병합", command=self._merge_backup)
-        menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        self._tool_dialog("백업 및 복구", [
+            ("금고 백업 만들기", self._create_backup),
+            ("백업을 현재 금고에 병합", self._merge_backup),
+        ])
 
     def _create_backup(self):
         destination = filedialog.asksaveasfilename(
@@ -510,12 +532,10 @@ class DigitalVaultApp:
         if not destination:
             return
         target = Path(destination)
-        overwrite = target.exists()
-        if overwrite and not messagebox.askyesno("덮어쓰기 확인",
-                "같은 이름의 백업본이 있습니다. 덮어쓸까요?", parent=self.root):
-            return
+        # asksaveasfilename의 기본 덮어쓰기 확인을 사용한다.
+        # 확인 후 선택 창이 반환되므로 앱에서 같은 질문을 반복하지 않는다.
         try:
-            count = self.vault.create_backup(target, overwrite=overwrite)
+            count = self.vault.create_backup(target, overwrite=True)
             messagebox.showinfo("백업 완료", f"백업을 만들었습니다.\n포함 파일: {count}개", parent=self.root)
         except Exception as error:
             messagebox.showerror("백업 실패", str(error), parent=self.root)

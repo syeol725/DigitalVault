@@ -308,7 +308,7 @@ def update_menu_timer(remaining_seconds):
             kernel32.SetConsoleCursorPosition(handle, original)
     else:
         # POSIX 터미널은 ANSI 커서 저장/복원으로 같은 행만 갱신합니다.
-        sys.stdout.write("\\x1b[s\\x1b[16A\\r" + line + "\\x1b[u")
+        sys.stdout.write("\x1b[s\x1b[16A\r" + line + "\x1b[u")
         sys.stdout.flush()
 
 

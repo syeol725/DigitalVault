@@ -290,10 +290,26 @@ def update_menu_timer(remaining_seconds):
                 ("dwMaximumWindowSize", COORD),
             ]
 
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.GetStdHandle(-11)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel32.GetStdHandle.restype = wintypes.HANDLE
+        kernel32.GetConsoleScreenBufferInfo.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(CONSOLE_SCREEN_BUFFER_INFO)
+        ]
+        kernel32.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
+        kernel32.SetConsoleCursorPosition.argtypes = [wintypes.HANDLE, COORD]
+        kernel32.SetConsoleCursorPosition.restype = wintypes.BOOL
+        kernel32.WriteConsoleW.argtypes = [
+            wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+        ]
+        kernel32.WriteConsoleW.restype = wintypes.BOOL
+
+        handle = kernel32.GetStdHandle(0xFFFFFFF5)  # STD_OUTPUT_HANDLE
         info = CONSOLE_SCREEN_BUFFER_INFO()
-        if not kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+        if not handle or not kernel32.GetConsoleScreenBufferInfo(
+            handle, ctypes.byref(info)
+        ):
             return
 
         original = info.dwCursorPosition

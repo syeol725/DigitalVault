@@ -346,6 +346,50 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 target.inspect_backup(backup, "wrong-password-123")
 
+    def test_backup_preview_explains_invalid_or_duplicate_document_names(self):
+        import tempfile
+
+        cases = [
+            ("path", "outside.txt", ".txt", "경로"),
+            ("extension", "report.pdf", ".txt", "확장자"),
+            ("unsupported", "program.exe", ".exe", "지원하지 않는 파일 형식"),
+            ("duplicate", "same.txt", ".txt", "중복"),
+        ]
+        for case, invalid_name, extension, expected_reason in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                vault = Vault(root / "vault")
+                password = "backup-validation-password-123"
+                vault.create(password)
+
+                first = root / "first.txt"
+                first.write_text("first document", encoding="utf-8")
+                vault.add_document(first)
+
+                if case == "duplicate":
+                    second = root / "second.txt"
+                    second.write_text("second document", encoding="utf-8")
+                    vault.add_document(second)
+                    ids = list(vault.index)
+                    vault.index[ids[1]]["name"] = invalid_name
+                    vault.index[ids[1]]["extension"] = extension
+                else:
+                    file_id = next(iter(vault.index))
+                    vault.index[file_id]["name"] = invalid_name
+                    vault.index[file_id]["extension"] = extension
+                vault.save_index()
+
+                backup = root / "invalid-name-backup.zip"
+                vault.create_backup(backup)
+                with self.assertRaises(ValueError) as caught:
+                    vault.inspect_backup(backup, password)
+
+                message = str(caught.exception)
+                self.assertIn("문서명:", message)
+                self.assertIn("원인:", message)
+                self.assertIn(expected_reason, message)
+                self.assertIn(repr(invalid_name), message)
+
     def test_backup_merge_conflict_keep_and_replace(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

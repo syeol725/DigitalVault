@@ -114,17 +114,22 @@ def timed_input(prompt, timeout, refresh=None):
         SESSION_DEADLINE = time.monotonic() + timeout
     last_rendered = 0
     last_refresh_remaining = remaining_session_seconds()
+    last_refresh_at = time.monotonic()
 
     def render():
-        nonlocal last_rendered, last_refresh_remaining
+        nonlocal last_rendered, last_refresh_remaining, last_refresh_at
         remaining = remaining_session_seconds()
-        if refresh is not None and remaining != last_refresh_remaining:
+        now = time.monotonic()
+        if refresh is not None and (
+            remaining != last_refresh_remaining or now - last_refresh_at >= 1.0
+        ):
             refresh(remaining)
             last_refresh_remaining = remaining
+            last_refresh_at = now
             last_rendered = 0
 
         if refresh is None:
-            line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
+            line = prompt + "".join(chars)
         else:
             line = prompt + "".join(chars)
 
@@ -1396,7 +1401,7 @@ def main():
                 continue
 
             answer = read_input(
-                "\\n작업을 계속하시겠습니까? (Y/N): "
+                "\n작업을 계속하시겠습니까? (Y/N): "
             )
             decision = continue_decision(answer)
             if decision == "continue":

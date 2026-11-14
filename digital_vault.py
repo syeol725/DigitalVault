@@ -1141,8 +1141,8 @@ class Vault:
 
             def invalid_document_name(reason, display_name=name):
                 return ValueError(
-                    "백업 문서명이 올바르지 않습니다.\\n"
-                    f"문서명: {display_name!r}\\n"
+                    "백업 문서명이 올바르지 않습니다.\n"
+                    f"문서명: {display_name!r}\n"
                     f"원인: {reason}"
                 )
 
@@ -1150,7 +1150,7 @@ class Vault:
                 raise invalid_document_name("문서명이 문자열 형식이 아닙니다.")
             if not name:
                 raise invalid_document_name("문서명이 비어 있습니다.")
-            if (Path(name).name != name or "/" in name or "\\\\" in name
+            if (Path(name).name != name or "/" in name or "\\" in name
                     or name in {".", ".."}):
                 raise invalid_document_name("문서명에 폴더 경로 또는 사용할 수 없는 경로 문자가 포함되어 있습니다.")
             if not isinstance(extension, str) or extension.lower() not in EXTENSIONS:

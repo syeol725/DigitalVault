@@ -1100,8 +1100,9 @@ class DigitalVaultApp:
         )
         note.pack(side="bottom", anchor="w", pady=(12, 8))
 
+        # 메인 화면의 저장된 문서 카드와 동일하게 표 바깥쪽에 14px 여백을 둡니다.
         table_frame = tk.Frame(card, bg="#FFFFFF")
-        table_frame.pack(fill="both", expand=True)
+        table_frame.pack(fill="both", expand=True, padx=14, pady=14)
         columns = ("name", "extension", "size", "state", "action")
         tree = ttk.Treeview(
             table_frame, columns=columns, show="headings",
@@ -1120,9 +1121,8 @@ class DigitalVaultApp:
                         stretch=(column == "name"))
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
-        # 메인 문서 목록의 카드 하단 여백과 비슷한 비율로 미리보기 표 아래 공간을 확보합니다.
-        tree.pack(side="left", fill="both", expand=True, pady=(0, 15))
-        scroll.pack(side="right", fill="y", pady=(0, 15))
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
 
         for doc in preview["documents"]:
             collision = bool(doc["collision_id"])

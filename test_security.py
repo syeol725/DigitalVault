@@ -350,7 +350,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
         import tempfile
 
         cases = [
-            ("path", "outside.txt", ".txt", "경로"),
+            ("path", "../outside.txt", ".txt", "경로"),
             ("extension", "report.pdf", ".txt", "확장자"),
             ("unsupported", "program.exe", ".exe", "지원하지 않는 파일 형식"),
             ("duplicate", "same.txt", ".txt", "중복"),
@@ -371,6 +371,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                     second.write_text("second document", encoding="utf-8")
                     vault.add_document(second)
                     ids = list(vault.index)
+                    vault.index[ids[0]]["name"] = invalid_name
                     vault.index[ids[1]]["name"] = invalid_name
                     vault.index[ids[1]]["extension"] = extension
                 else:

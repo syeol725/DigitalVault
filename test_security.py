@@ -45,7 +45,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertEqual(read_input("계속하시겠습니까? (y/n): "), "n")
 
     def test_document_list_is_aligned_sorted_and_shows_total_size(self):
-        from digital_vault import Vault
+        from digital_vault import Vault, display_width
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             docs = root / "documents"

@@ -139,9 +139,11 @@ class DigitalVaultApp:
             else:
                 _result, output = self._capture(lambda: vault.login(password))
                 if vault.key is None:
-                    message = output or "비밀번호가 올바르지 않습니다."
-                    if vault.lock_status():
-                        message += f"\n로그인 제한: {vault.lock_status()}초"
+                    remaining = vault.lock_status()
+                    message = (
+                        f"로그인 제한 중입니다. {remaining}초 후 다시 시도하세요."
+                        if remaining else (output or "비밀번호가 올바르지 않습니다.")
+                    )
                     self._show_message("error", "로그인 실패", message, parent=self.root)
                     return
             self.vault = vault
@@ -708,13 +710,18 @@ class DigitalVaultApp:
         self._tool_dialog("보안 관리", [
             ("비밀번호 변경", self._change_password),
             ("마스터 키 재발급", self._rotate_key),
-            ("복구 키 발급", self._issue_recovery),
+            ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
         ])
 
     def _change_password(self):
         old = self._ask_string("비밀번호 변경", "현재 비밀번호:", show="●", parent=self.root)
         if old is None:
+            return
+        if not self.vault.verify_password(old):
+            self._show_message(
+                "error", "인증 실패", "현재 비밀번호가 올바르지 않습니다.", parent=self.root
+            )
             return
         new = self._ask_string("비밀번호 변경", "새 비밀번호 (8자 이상):", show="●", parent=self.root)
         if new is None:
@@ -723,6 +730,8 @@ class DigitalVaultApp:
             self._show_message("error", "비밀번호 확인", "비밀번호는 8자 이상이어야 합니다.", parent=self.root)
             return
         confirm = self._ask_string("비밀번호 변경", "새 비밀번호 확인:", show="●", parent=self.root)
+        if confirm is None:
+            return
         if confirm != new:
             self._show_message("error", "비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
             return
@@ -739,30 +748,30 @@ class DigitalVaultApp:
         password = self._ask_string("재인증", "현재 비밀번호:", show="●", parent=self.root)
         if password is None:
             return
-        meta = json.loads(self.vault.meta_file.read_text(encoding="utf-8"))
-        recovery = None
-        if meta.get("recovery_wrapped_key"):
-            recovery = self._ask_string("복구 키 확인",
-                "복구 기능을 유지하려면 기존 복구 키를 입력하세요:", show="●", parent=self.root)
-            if recovery is None:
-                return
         try:
-            self.vault.rotate_master_key(password, recovery)
-            self._show_message("info", "완료", "마스터 키를 재발급했습니다.", parent=self.root)
+            new_recovery_key = self.vault.rotate_master_key(password)
+            message = "마스터 키를 재발급했습니다."
+            if new_recovery_key:
+                message += (
+                    "\n\n기존 복구 키는 더 이상 사용할 수 없습니다."
+                    "\n새 복구 키를 안전한 별도 장소에 보관하세요."
+                    "\n\n" + new_recovery_key
+                )
+            self._show_message("info", "완료", message, parent=self.root)
         except Exception as error:
             self._show_message("error", "재발급 실패", str(error), parent=self.root)
 
     def _issue_recovery(self):
-        password = self._ask_string("복구 키 발급", "현재 비밀번호를 입력하세요:",
+        password = self._ask_string("복구 키 재발급", "현재 비밀번호를 입력하세요:",
                                           show="●", parent=self.root)
         if password is None:
             return
         try:
             key = self.vault.setup_recovery_key(password)
-            self._show_message("info", "복구 키 발급", "아래 키를 안전한 별도 장소에 보관하세요.\n"
+            self._show_message("info", "복구 키 재발급", "아래 키를 안전한 별도 장소에 보관하세요.\n"
                 "이 창을 닫으면 다시 표시되지 않습니다.\n\n" + key, parent=self.root)
         except Exception as error:
-            self._show_message("error", "발급 실패", str(error), parent=self.root)
+            self._show_message("error", "재발급 실패", str(error), parent=self.root)
 
     def _show_log(self):
         output = io.StringIO()

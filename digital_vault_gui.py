@@ -835,7 +835,7 @@ class DigitalVaultApp:
             count = self.vault.export_security_log(destination)
             self._show_message(
                 "info", "내보내기 완료",
-                f"보안 기록을 CSV로 저장했습니다.\\n포함 기록: {count}건",
+                f"보안 기록을 CSV로 저장했습니다.\n포함 기록: {count}건",
                 parent=self.root,
             )
         except Exception as error:

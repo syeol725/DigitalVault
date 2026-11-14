@@ -599,7 +599,7 @@ class DigitalVaultApp:
         font = tkfont.Font(family="Malgun Gothic", size=9)
         line_height = max(18, font.metrics("linespace") + 3)
         provisional_lines = min(max(1, sum(max(1, len(line) // 58 + 1) for line in prompt_text.split("\n"))), 8)
-        height = self._dialog_height(provisional_lines, line_height, 222)
+        height = self._dialog_height(provisional_lines, line_height, 244)
         window = self._dialog_window(title, 560, height)
 
         card = tk.Frame(window, bg="#FFFFFF", padx=28, pady=22)
@@ -638,7 +638,7 @@ class DigitalVaultApp:
                          font=("Malgun Gothic", 10))
         entry.pack(fill="both", expand=True, padx=10, ipady=9)
 
-        available_lines = max(2, min(8, (height - 222) // line_height))
+        available_lines = max(2, min(8, (height - 244) // line_height))
         body, _lines, _lh = self._dialog_text(
             card, prompt_text, max_lines=available_lines, width_chars=64
         )

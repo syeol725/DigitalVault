@@ -1128,7 +1128,11 @@ class Vault:
             self.index = {**previous_index, **staged_index}
             self.save_index()
             added = len(staged_index)
-            self.log_event("backup_merged")
+            try:
+                self.log_event("backup_merged")
+            except Exception:
+                # 감사 로그 기록 실패가 완료된 병합을 되돌리지는 않도록 한다.
+                print("주의: 병합은 완료됐지만 보안 기록을 추가하지 못했습니다.")
             return added
         except Exception:
             self.index = previous_index

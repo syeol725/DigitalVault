@@ -302,7 +302,7 @@ def update_menu_timer(remaining_seconds):
         try:
             if kernel32.SetConsoleCursorPosition(handle, timer_position):
                 kernel32.WriteConsoleW(
-                    handle, line, len(line), ctypes.byref(written), None
+                    handle, ctypes.c_wchar_p(line), len(line), ctypes.byref(written), None
                 )
         finally:
             kernel32.SetConsoleCursorPosition(handle, original)

@@ -462,7 +462,7 @@ class Vault:
                     root.destroy()
             except Exception:
                 print("GUI 환경을 사용할 수 없습니다.")
-                source = input("추가할 파일 경로: ").strip().strip('"')
+                source = read_input("추가할 파일 경로: ").strip().strip('"')
 
         if not source:
             print("파일 선택이 취소되었습니다.")

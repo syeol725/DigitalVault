@@ -91,6 +91,7 @@ def decrypt(key, data, aad=None):
 
 
 def timed_input(prompt, timeout):
+    """메뉴 입력을 제한 시간 동안 기다립니다. 시간 초과 시 None을 반환합니다."""
     print(prompt, end="", flush=True)
     deadline, chars = time.monotonic() + timeout, []
     if os.name == "nt":
@@ -98,33 +99,54 @@ def timed_input(prompt, timeout):
         while time.monotonic() < deadline:
             if msvcrt.kbhit():
                 ch = msvcrt.getwch()
-                if ch in ("\\r", "\\n"):
-                    print(); return "".join(chars)
-                if ch == "\\003": raise KeyboardInterrupt
-                if ch == "\\b":
-                    if chars: chars.pop(); print("\\b \\b", end="", flush=True)
-                elif ch.isprintable(): chars.append(ch); print(ch, end="", flush=True)
-            else: time.sleep(0.05)
+                code = ord(ch)
+                if code in (10, 13):
+                    print()
+                    return "".join(chars)
+                if code == 3:
+                    raise KeyboardInterrupt
+                if code == 8:
+                    if chars:
+                        chars.pop()
+                        print(chr(8) + " " + chr(8), end="", flush=True)
+                elif ch.isprintable():
+                    chars.append(ch)
+                    print(ch, end="", flush=True)
+            else:
+                time.sleep(0.05)
     else:
-        import select, termios, tty
-        if not sys.stdin.isatty(): return input()
-        fd, old = sys.stdin.fileno(), termios.tcgetattr(sys.stdin.fileno())
+        import select
+        import termios
+        import tty
+        if not sys.stdin.isatty():
+            return input()
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
             while time.monotonic() < deadline:
                 ready, _, _ = select.select([sys.stdin], [], [], 0.1)
-                if not ready: continue
+                if not ready:
+                    continue
                 ch = sys.stdin.read(1)
-                if ch in ("\\r", "\\n"):
-                    print(); return "".join(chars)
-                if ch in ("\\x7f", "\\b"):
-                    if chars: chars.pop(); print("\\b \\b", end="", flush=True)
-                elif ch == "\\x03": raise KeyboardInterrupt
-                elif ch.isprintable(): chars.append(ch); print(ch, end="", flush=True)
-        finally: termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    print("\\n입력 대기 시간이 초과되어 금고를 잠급니다.")
+                code = ord(ch)
+                if code in (10, 13):
+                    print()
+                    return "".join(chars)
+                if code in (8, 127):
+                    if chars:
+                        chars.pop()
+                        print(chr(8) + " " + chr(8), end="", flush=True)
+                elif code == 3:
+                    raise KeyboardInterrupt
+                elif ch.isprintable():
+                    chars.append(ch)
+                    print(ch, end="", flush=True)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    print()
+    print("입력 대기 시간이 초과되어 금고를 잠급니다.")
     return None
-
 
 def atomic_write(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)

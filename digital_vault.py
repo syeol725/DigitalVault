@@ -1115,10 +1115,9 @@ class Vault:
         destination = Path(destination).expanduser()
         if destination.exists():
             raise FileExistsError("기존 백업 파일을 덮어쓰지 않습니다.")
+        # 백업에는 복원에 필요한 금고 메타데이터, 암호화 인덱스,
+        # 암호화된 문서만 포함합니다. 보안 이벤트 로그는 별도 운영 기록이므로 제외합니다.
         files = [self.meta_file, self.index_file] + sorted(self.docs.glob("*.bin"))
-        audit_path = self.folder / "security.log"
-        if audit_path.exists():
-            files.append(audit_path)
         manifest = {}
         buffer = BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:

@@ -253,7 +253,8 @@ class DigitalVaultApp:
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self.tree.bind("<Double-1>", lambda _e: self._open_document())
+        self.tree.bind("<Button-1>", self._toggle_tree_selection)
+        self.tree.bind("<Double-1>", self._open_document_from_double_click)
         self._refresh_documents()
 
     def _dialog_window(self, title, width=560, height=260):
@@ -468,6 +469,13 @@ class DigitalVaultApp:
             fill="x", pady=(12, 0)
         )
 
+        # 고정 추정치가 아닌 실제 위젯 요청 크기로 창 높이를 산정해
+        # 마지막 '닫기' 버튼이 창 아래로 밀려나지 않도록 합니다.
+        window.update_idletasks()
+        required_width = window.winfo_reqwidth() + 8
+        required_height = window.winfo_reqheight() + 8
+        width = min(max(width, required_width), max(320, screen_w - 48))
+        height = min(max(240, required_height), max(220, screen_h - 48))
         x = max(12, (screen_w - width) // 2)
         y = max(12, (screen_h - height) // 2)
         window.geometry(f"{width}x{height}+{x}+{y}")
@@ -511,6 +519,27 @@ class DigitalVaultApp:
             return f"{size / 1024:.1f} KB"
         return f"{size / (1024 ** 2):.2f} MB"
 
+    def _toggle_tree_selection(self, event):
+        """Ctrl/Shift 없이 클릭할 때마다 해당 문서의 선택 상태를 전환합니다."""
+        file_id = self.tree.identify_row(event.y)
+        if not file_id:
+            return "break"
+        selected = set(self.tree.selection())
+        if file_id in selected:
+            self.tree.selection_remove(file_id)
+        else:
+            self.tree.selection_add(file_id)
+        self.tree.focus(file_id)
+        return "break"
+
+    def _open_document_from_double_click(self, event):
+        file_id = self.tree.identify_row(event.y)
+        if file_id:
+            self.tree.selection_set(file_id)
+            self.tree.focus(file_id)
+            self._open_document()
+        return "break"
+
     def _selected_ids(self):
         selected = self.tree.selection()
         if not selected:
@@ -545,35 +574,56 @@ class DigitalVaultApp:
 
     def _export_document(self):
         ids = self._selected_ids()
-        if not ids:
+        if ids:
+            self._export_document_sequence(ids, 0)
+
+    def _export_document_sequence(self, ids, index):
+        if index >= len(ids):
             return
-        file_id = ids[0]
-        info = self.vault.index[file_id]
+        file_id = ids[index]
+        info = self.vault.index.get(file_id)
+        if info is None:
+            self._show_message("warning", "내보내기 건너뜀",
+                "선택한 문서를 찾을 수 없습니다.", parent=self.root)
+            return
         ext = info["extension"]
         destination = filedialog.asksaveasfilename(
-            title="문서를 저장할 위치 선택", initialfile=info["name"],
-            defaultextension=ext, confirmoverwrite=True,
+            title=f"문서 내보내기 ({index + 1}/{len(ids)})",
+            initialfile=info["name"], defaultextension=ext,
+            confirmoverwrite=True,
             filetypes=[(f"원본 형식 (*{ext})", f"*{ext}"), ("모든 파일", "*.*")],
             parent=self.root)
         if not destination:
             return
-        target = Path(destination)
         try:
             data = decrypt(self.vault.key,
                 (self.vault.docs / (file_id + ".bin")).read_bytes(),
                 ("DigitalVault:document:v2:" + file_id).encode())
-            atomic_write(target, data)
-            self._show_message("info", "내보내기 완료",
-                "문서를 내보냈습니다.\n내보낸 파일은 금고 외부에 암호화되지 않은 상태로 저장됩니다.",
-                parent=self.root)
+            atomic_write(Path(destination), data)
+            message = (
+                f"선택한 문서 {len(ids)}개 중 {index + 1}번째 문서를 내보냈습니다.\n"
+                "내보낸 파일은 금고 외부에 암호화되지 않은 상태로 저장됩니다."
+            )
+            if index + 1 < len(ids):
+                message += "\n\n확인을 누르면 다음 문서의 저장 위치를 선택합니다."
+            else:
+                message += "\n\n선택한 문서의 내보내기가 모두 완료되었습니다."
+            self._show_message("info", "내보내기 진행", message, parent=self.root)
         except Exception as error:
-            self._show_message("error", "내보내기 실패", str(error), parent=self.root)
+            self._show_message("error", "내보내기 실패",
+                f"{info['name']}\n\n{error}", parent=self.root)
+        if index + 1 < len(ids):
+            self._export_document_sequence(ids, index + 1)
 
     def _open_document(self):
         ids = self._selected_ids()
-        if not ids:
+        if ids:
+            self._open_document_sequence(ids, 0)
+
+    def _open_document_sequence(self, ids, index):
+        if index >= len(ids):
             return
-        file_id = ids[0]
+        file_id = ids[index]
         temp_dir = None
         try:
             info = self.vault.index[file_id]
@@ -599,14 +649,24 @@ class DigitalVaultApp:
                     subprocess.Popen(["open", str(temp_file)])
                 else:
                     subprocess.Popen(["xdg-open", str(temp_file)])
-            self._show_message("info", "문서 열기",
-                "문서를 외부 프로그램에서 열었습니다.\n확인을 누르면 임시 복호화 파일을 정리합니다.\n"
-                "문서를 사용 중이라면 먼저 닫아 주세요.", parent=self.root)
+            message = (
+                f"선택한 문서 {len(ids)}개 중 {index + 1}번째 문서를 열었습니다.\n"
+                "문서를 외부 프로그램에서 사용한 뒤 확인을 눌러 주세요."
+            )
+            if index + 1 < len(ids):
+                message += "\n\n확인을 누르면 다음 문서를 엽니다."
+            else:
+                message += "\n\n선택한 문서를 모두 열었습니다."
+            self._show_message("info", "문서 열기 진행", message, parent=self.root)
         except Exception as error:
-            self._show_message("error", "문서 열기 실패", str(error), parent=self.root)
+            self._show_message("error", "문서 열기 실패",
+                f"{self.vault.index.get(file_id, {}).get('name', file_id)}\n\n{error}",
+                parent=self.root)
         finally:
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+        if index + 1 < len(ids):
+            self._open_document_sequence(ids, index + 1)
 
     def _delete_document(self):
         ids = self._selected_ids()
@@ -626,6 +686,11 @@ class DigitalVaultApp:
     def _rename_document(self):
         ids = self._selected_ids()
         if not ids:
+            return
+        if len(ids) > 1:
+            self._show_message("warning", "이름 변경",
+                "이름 변경은 한 번에 한 문서만 가능합니다.\n문서 하나만 선택한 뒤 다시 시도하세요.",
+                parent=self.root)
             return
         file_id = ids[0]
         old = self.vault.index[file_id]["name"]
@@ -717,7 +782,7 @@ class DigitalVaultApp:
     def _backup_menu(self):
         self._tool_dialog("백업 및 복구", [
             ("금고 백업 만들기", self._create_backup),
-            ("백업을 현재 금고에 병합", self._merge_backup),
+            ("이 금고에 백업 불러오기", self._merge_backup),
         ])
 
     def _create_backup(self):

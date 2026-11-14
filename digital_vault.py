@@ -1199,16 +1199,15 @@ class Vault:
             "documents": documents,
         }
 
-    def merge_backup(self, archive_path, backup_password, conflict_choices=None):
-        """검증된 백업을 현재 금고에 병합하고 선택된 충돌 문서만 교체합니다."""
+    def merge_backup(self, archive_path, backup_password):
+        """검증된 백업을 병합하며 기존 문서와 이름 충돌 시 현재 문서를 유지합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 백업을 병합할 수 있습니다.")
-        conflict_choices = conflict_choices or {}
         preview = self.inspect_backup(archive_path, backup_password)
         staged_dir = Path(tempfile.mkdtemp(prefix=".vault-merge-", dir=self.folder))
         previous_index = self.index.copy()
-        staged_new, staged_replace = {}, {}
-        applied_new, applied_replace = [], []
+        staged_new = {}
+        applied_new = []
         added = replaced = skipped = duplicate_skipped = 0
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
@@ -1248,20 +1247,7 @@ class Vault:
                 source_aad = ("DigitalVault:document:v2:" + old_id).encode()
                 plain = decrypt(source_key, payloads[f"documents/{old_id}.bin"], source_aad)
                 if collision:
-                    choice = conflict_choices.get(old_id, "keep")
-                    if choice not in {"keep", "replace"}:
-                        raise ValueError("알 수 없는 문서 충돌 처리 방식입니다.")
-                    if choice == "keep":
-                        skipped += 1
-                        continue
-                    target_id, target_info = collision
-                    target_aad = ("DigitalVault:document:v2:" + target_id).encode()
-                    staged_replace[target_id] = encrypt(self.key, plain, target_aad)
-                    staged_index[target_id] = {
-                        "name": target_info["name"],
-                        "extension": target_info["extension"],
-                    }
-                    replaced += 1
+                    skipped += 1
                     continue
 
                 new_id = secrets.token_hex(12)
@@ -1276,21 +1262,13 @@ class Vault:
 
             for file_id, data in staged_new.items():
                 (staged_dir / (file_id + ".new")).write_bytes(data)
-            for file_id, data in staged_replace.items():
-                (staged_dir / (file_id + ".new")).write_bytes(data)
-                original = (self.docs / (file_id + ".bin")).read_bytes()
-                (staged_dir / (file_id + ".old")).write_bytes(original)
             (staged_dir / "index.old").write_bytes(self.index_file.read_bytes())
             journal_path = self.folder / ".merge-recovery.json"
             write_json(journal_path, {
                 "state": "applying", "stage": staged_dir.name,
-                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+                "new_ids": list(staged_new),
             })
 
-            # 원본 파일과 인덱스 백업을 먼저 기록한 뒤 실제 문서를 교체합니다.
-            for file_id in staged_replace:
-                os.replace(staged_dir / (file_id + ".new"), self.docs / (file_id + ".bin"))
-                applied_replace.append(file_id)
             for file_id in staged_new:
                 target = self.docs / (file_id + ".bin")
                 if target.exists():
@@ -1302,10 +1280,10 @@ class Vault:
             self.save_index()
             write_json(journal_path, {
                 "state": "committed", "stage": staged_dir.name,
-                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+                "new_ids": list(staged_new),
             })
             self.last_merge_summary = {
-                "added": added, "replaced": replaced, "skipped": skipped,
+                "added": added, "replaced": 0, "skipped": skipped,
                 "duplicate_skipped": duplicate_skipped,
             }
             try:
@@ -1317,10 +1295,6 @@ class Vault:
             self.index = previous_index
             for file_id in applied_new:
                 (self.docs / (file_id + ".bin")).unlink(missing_ok=True)
-            for file_id in applied_replace:
-                backup = staged_dir / (file_id + ".old")
-                if backup.exists():
-                    os.replace(backup, self.docs / (file_id + ".bin"))
             try:
                 self.save_index()
                 if "journal_path" in locals():

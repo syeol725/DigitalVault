@@ -381,7 +381,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                 self.assertIn(expected_reason, message)
                 self.assertIn(repr(invalid_name), message)
 
-    def test_backup_preview_allows_duplicate_names_and_proposes_unique_restore_names(self):
+    def test_backup_preview_marks_duplicate_names_for_exclusion(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as directory:
@@ -405,19 +405,14 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             preview = target.inspect_backup(backup, password)
             self.assertEqual(preview["document_count"], 3)
             self.assertEqual(preview["collision_count"], 0)
+            self.assertEqual(preview["new_count"], 1)
+            self.assertEqual(preview["duplicate_count"], 2)
             self.assertEqual(
-                [doc["restore_name"] for doc in preview["documents"]],
-                [
-                    "배당금 계산.xlsx",
-                    "배당금 계산 (복원 1).xlsx",
-                    "배당금 계산 (복원 2).xlsx",
-                ],
-            )
-            self.assertEqual(
-                sum(doc["duplicate_in_backup"] for doc in preview["documents"]), 2
+                [doc["duplicate_in_backup"] for doc in preview["documents"]],
+                [False, True, True],
             )
 
-    def test_backup_merge_restores_duplicate_names_without_overwriting_documents(self):
+    def test_backup_merge_skips_duplicate_names_and_keeps_first_document(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as directory:
@@ -441,15 +436,13 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             target.create("target-duplicate-merge-password-123")
 
             target.merge_backup(backup, password)
-            self.assertEqual(len(target.index), 3)
+            self.assertEqual(len(target.index), 1)
             self.assertEqual(
                 {info["name"] for info in target.index.values()},
-                {
-                    "배당금 계산.xlsx",
-                    "배당금 계산 (복원 1).xlsx",
-                    "배당금 계산 (복원 2).xlsx",
-                },
+                {"배당금 계산.xlsx"},
             )
+            self.assertEqual(target.last_merge_summary["added"], 1)
+            self.assertEqual(target.last_merge_summary["duplicate_skipped"], 2)
             restored_contents = []
             for file_id in target.index:
                 aad = ("DigitalVault:document:v2:" + file_id).encode()
@@ -460,7 +453,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                         aad,
                     )
                 )
-            self.assertEqual(set(restored_contents), set(expected_contents))
+            self.assertEqual(restored_contents, [expected_contents[0]])
             self.assertTrue(target.integrity_check())
 
     def test_backup_merge_conflict_keep_and_replace(self):

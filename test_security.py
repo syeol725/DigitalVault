@@ -35,7 +35,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(reopened.login("updated-password-456"))
             self.assertEqual(len(reopened.index), 1)
 
-            reopened.rotate_master_key()
+            reopened.rotate_master_key("updated-password-456")
             self.assertNotEqual(reopened.key, original_key)
 
             new_session = Vault(root / "vault")

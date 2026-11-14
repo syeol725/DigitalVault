@@ -753,6 +753,7 @@ class DigitalVaultApp:
             ("마스터 키 재발급", self._rotate_key),
             ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
+            ("보안 기록 CSV 내보내기", self._export_security_log),
         ])
 
     def _change_password(self):
@@ -819,6 +820,26 @@ class DigitalVaultApp:
         with contextlib.redirect_stdout(output):
             self.vault.show_security_log()
         self._text_window("보안 기록", output.getvalue())
+
+    def _export_security_log(self):
+        destination = filedialog.asksaveasfilename(
+            title="보안 기록 CSV 저장",
+            defaultextension=".csv",
+            confirmoverwrite=True,
+            filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")],
+            parent=self.root,
+        )
+        if not destination:
+            return
+        try:
+            count = self.vault.export_security_log(destination)
+            self._show_message(
+                "info", "내보내기 완료",
+                f"보안 기록을 CSV로 저장했습니다.\\n포함 기록: {count}건",
+                parent=self.root,
+            )
+        except Exception as error:
+            self._show_message("error", "내보내기 실패", str(error), parent=self.root)
 
     def _backup_menu(self):
         self._tool_dialog("백업 및 복구", [

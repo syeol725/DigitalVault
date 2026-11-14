@@ -115,25 +115,25 @@ class DigitalVaultApp:
         folder_text = self.folder_var.get().strip()
         password = self.password_var.get()
         if not folder_text or not password:
-            messagebox.showwarning("입력 확인", "금고 위치와 비밀번호를 입력하세요.", parent=self.root)
+            self._show_message("warning", "입력 확인", "금고 위치와 비밀번호를 입력하세요.", parent=self.root)
             return
         try:
             vault = Vault(Path(folder_text).expanduser())
             if not vault.exists:
                 if len(password) < 8:
-                    messagebox.showwarning("비밀번호 확인", "새 금고 비밀번호는 8자 이상이어야 합니다.", parent=self.root)
+                    self._show_message("warning", "비밀번호 확인", "새 금고 비밀번호는 8자 이상이어야 합니다.", parent=self.root)
                     return
-                confirm = simpledialog.askstring("비밀번호 확인", "새 비밀번호를 한 번 더 입력하세요.",
+                confirm = self._ask_string("비밀번호 확인", "새 비밀번호를 한 번 더 입력하세요.",
                                                  show="●", parent=self.root)
                 if confirm is None:
                     return
                 if password != confirm:
-                    messagebox.showerror("확인 실패", "비밀번호가 일치하지 않습니다.", parent=self.root)
+                    self._show_message("error", "확인 실패", "비밀번호가 일치하지 않습니다.", parent=self.root)
                     return
                 vault.create(password)
                 recovery = getattr(vault, "recovery_key_display", None)
                 if recovery:
-                    messagebox.showinfo("복구 키 보관", "복구 키를 안전한 별도 장소에 보관하세요.\n\n"
+                    self._show_message("info", "복구 키 보관", "복구 키를 안전한 별도 장소에 보관하세요.\n\n"
                                        + recovery, parent=self.root)
             else:
                 _result, output = self._capture(lambda: vault.login(password))
@@ -141,45 +141,45 @@ class DigitalVaultApp:
                     message = output or "비밀번호가 올바르지 않습니다."
                     if vault.lock_status():
                         message += f"\n로그인 제한: {vault.lock_status()}초"
-                    messagebox.showerror("로그인 실패", message, parent=self.root)
+                    self._show_message("error", "로그인 실패", message, parent=self.root)
                     return
             self.vault = vault
             self._dashboard()
         except Exception as error:
-            messagebox.showerror("금고 열기 실패", str(error), parent=self.root)
+            self._show_message("error", "금고 열기 실패", str(error), parent=self.root)
 
     def _recover_password(self):
         folder_text = self.folder_var.get().strip()
         if not folder_text:
-            messagebox.showwarning("금고 위치", "먼저 금고 폴더를 선택하세요.", parent=self.root)
+            self._show_message("warning", "금고 위치", "먼저 금고 폴더를 선택하세요.", parent=self.root)
             return
         try:
             vault = Vault(Path(folder_text).expanduser())
             if not vault.exists:
-                messagebox.showerror("복구 실패", "선택한 위치에 금고가 없습니다.", parent=self.root)
+                self._show_message("error", "복구 실패", "선택한 위치에 금고가 없습니다.", parent=self.root)
                 return
-            recovery = simpledialog.askstring("복구 키", "보관한 복구 키를 입력하세요:",
+            recovery = self._ask_string("복구 키", "보관한 복구 키를 입력하세요:",
                                               show="●", parent=self.root)
             if recovery is None:
                 return
-            new_password = simpledialog.askstring("새 비밀번호", "새 비밀번호 (8자 이상):",
+            new_password = self._ask_string("새 비밀번호", "새 비밀번호 (8자 이상):",
                                                   show="●", parent=self.root)
             if new_password is None:
                 return
             if len(new_password) < 8:
-                messagebox.showerror("비밀번호 확인", "비밀번호는 8자 이상이어야 합니다.", parent=self.root)
+                self._show_message("error", "비밀번호 확인", "비밀번호는 8자 이상이어야 합니다.", parent=self.root)
                 return
-            confirm = simpledialog.askstring("새 비밀번호 확인", "새 비밀번호를 다시 입력하세요:",
+            confirm = self._ask_string("새 비밀번호 확인", "새 비밀번호를 다시 입력하세요:",
                                              show="●", parent=self.root)
             if confirm != new_password:
-                messagebox.showerror("비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
+                self._show_message("error", "비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
                 return
             vault.recover_with_key(recovery, new_password)
             self.vault = vault
             self._dashboard()
-            messagebox.showinfo("복구 완료", "새 비밀번호로 금고를 복구했습니다.", parent=self.root)
+            self._show_message("info", "복구 완료", "새 비밀번호로 금고를 복구했습니다.", parent=self.root)
         except Exception as error:
-            messagebox.showerror("복구 실패", str(error), parent=self.root)
+            self._show_message("error", "복구 실패", str(error), parent=self.root)
 
     def _clear(self):
         # 이전 화면의 Treeview 위젯 참조가 남으면 재로그인 시 TclError가 발생한다.
@@ -255,6 +255,87 @@ class DigitalVaultApp:
         self.tree.bind("<Double-1>", lambda _e: self._open_document())
         self._refresh_documents()
 
+    def _dialog_window(self, title, width=440, height=230):
+        window = tk.Toplevel(self.root)
+        window.title(title)
+        window.configure(bg="#F5F7FB")
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        window.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
+        window.grab_set()
+        return window
+
+    def _show_message(self, kind, title, message, parent=None):
+        colors = {"info": "#315ECA", "warning": "#B7791F", "error": "#C43D4B"}
+        symbols = {"info": "i", "warning": "!", "error": "×"}
+        window = self._dialog_window(title, 460, 230)
+        card = tk.Frame(window, bg="#FFFFFF", padx=26, pady=24)
+        card.pack(fill="both", expand=True, padx=12, pady=12)
+        top = tk.Frame(card, bg="#FFFFFF")
+        top.pack(fill="x")
+        tk.Label(top, text=symbols[kind], bg=colors[kind], fg="#FFFFFF",
+                 font=("Segoe UI", 13, "bold"), width=2, height=1).pack(side="left", padx=(0, 12))
+        tk.Label(top, text=title, bg="#FFFFFF", fg="#202938",
+                 font=("Malgun Gothic", 13, "bold")).pack(side="left")
+        tk.Label(card, text=str(message), bg="#FFFFFF", fg="#536176",
+                 font=("Malgun Gothic", 9), justify="left", anchor="w",
+                 wraplength=390).pack(fill="both", expand=True, pady=(18, 18))
+        ttk.Button(card, text="확인", style="Accent.TButton",
+                   command=window.destroy).pack(anchor="e")
+        window.bind("<Return>", lambda _e: window.destroy())
+        window.bind("<Escape>", lambda _e: window.destroy())
+        window.wait_window()
+
+    def _ask_yes_no(self, title, message, parent=None):
+        result = {"value": False}
+        window = self._dialog_window(title, 460, 230)
+        card = tk.Frame(window, bg="#FFFFFF", padx=26, pady=24)
+        card.pack(fill="both", expand=True, padx=12, pady=12)
+        tk.Label(card, text=title, bg="#FFFFFF", fg="#202938",
+                 font=("Malgun Gothic", 13, "bold")).pack(anchor="w")
+        tk.Label(card, text=str(message), bg="#FFFFFF", fg="#536176",
+                 font=("Malgun Gothic", 9), justify="left", anchor="w",
+                 wraplength=390).pack(fill="both", expand=True, pady=(18, 18))
+        actions = tk.Frame(card, bg="#FFFFFF")
+        actions.pack(fill="x")
+        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(actions, text="확인", style="Accent.TButton",
+                   command=lambda: (result.update(value=True), window.destroy())).pack(side="right")
+        window.bind("<Escape>", lambda _e: window.destroy())
+        window.wait_window()
+        return result["value"]
+
+    def _ask_string(self, title, prompt, **kwargs):
+        result = {"value": None}
+        show = kwargs.get("show")
+        initial = kwargs.get("initialvalue", "")
+        window = self._dialog_window(title, 460, 245)
+        card = tk.Frame(window, bg="#FFFFFF", padx=26, pady=24)
+        card.pack(fill="both", expand=True, padx=12, pady=12)
+        tk.Label(card, text=title, bg="#FFFFFF", fg="#202938",
+                 font=("Malgun Gothic", 13, "bold")).pack(anchor="w")
+        tk.Label(card, text=str(prompt), bg="#FFFFFF", fg="#536176",
+                 font=("Malgun Gothic", 9)).pack(anchor="w", pady=(16, 8))
+        value = tk.StringVar(value=initial or "")
+        entry = tk.Entry(card, textvariable=value, show=show or "",
+                         relief="solid", bd=1, font=("Malgun Gothic", 10))
+        entry.pack(fill="x", ipady=9)
+        actions = tk.Frame(card, bg="#FFFFFF")
+        actions.pack(fill="x", pady=(20, 0))
+        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
+        def submit():
+            result["value"] = value.get()
+            window.destroy()
+        ttk.Button(actions, text="확인", style="Accent.TButton", command=submit).pack(side="right")
+        window.bind("<Return>", lambda _e: submit())
+        window.bind("<Escape>", lambda _e: window.destroy())
+        entry.focus_set()
+        window.wait_window()
+        return result["value"]
+
     def _tool_dialog(self, title, actions):
         window = tk.Toplevel(self.root)
         window.title(title)
@@ -318,7 +399,7 @@ class DigitalVaultApp:
     def _selected_ids(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showinfo("문서 선택", "먼저 문서를 선택하세요.", parent=self.root)
+            self._show_message("info", "문서 선택", "먼저 문서를 선택하세요.", parent=self.root)
             return []
         return list(selected)
 
@@ -345,7 +426,7 @@ class DigitalVaultApp:
         message = f"문서 {len(added)}개를 추가했습니다."
         if failed:
             message += "\n\n실패:\n" + "\n".join(failed)
-        messagebox.showinfo("문서 추가", message, parent=self.root)
+        self._show_message("info", "문서 추가", message, parent=self.root)
 
     def _export_document(self):
         ids = self._selected_ids()
@@ -367,11 +448,11 @@ class DigitalVaultApp:
                 (self.vault.docs / (file_id + ".bin")).read_bytes(),
                 ("DigitalVault:document:v2:" + file_id).encode())
             atomic_write(target, data)
-            messagebox.showinfo("내보내기 완료",
+            self._show_message("info", "내보내기 완료",
                 "문서를 내보냈습니다.\n내보낸 파일은 금고 외부에 암호화되지 않은 상태로 저장됩니다.",
                 parent=self.root)
         except Exception as error:
-            messagebox.showerror("내보내기 실패", str(error), parent=self.root)
+            self._show_message("error", "내보내기 실패", str(error), parent=self.root)
 
     def _open_document(self):
         ids = self._selected_ids()
@@ -403,11 +484,11 @@ class DigitalVaultApp:
                     subprocess.Popen(["open", str(temp_file)])
                 else:
                     subprocess.Popen(["xdg-open", str(temp_file)])
-            messagebox.showinfo("문서 열기",
+            self._show_message("info", "문서 열기",
                 "문서를 외부 프로그램에서 열었습니다.\n확인을 누르면 임시 복호화 파일을 정리합니다.\n"
                 "문서를 사용 중이라면 먼저 닫아 주세요.", parent=self.root)
         except Exception as error:
-            messagebox.showerror("문서 열기 실패", str(error), parent=self.root)
+            self._show_message("error", "문서 열기 실패", str(error), parent=self.root)
         finally:
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -417,7 +498,7 @@ class DigitalVaultApp:
         if not ids:
             return
         names = [self.vault.index[file_id]["name"] for file_id in ids]
-        if not messagebox.askyesno("문서 삭제", f"선택한 문서 {len(ids)}개를 삭제할까요?\n\n"
+        if not self._ask_yes_no("문서 삭제", f"선택한 문서 {len(ids)}개를 삭제할까요?\n\n"
                 + "\n".join(names), parent=self.root):
             return
         for file_id in ids:
@@ -433,19 +514,19 @@ class DigitalVaultApp:
             return
         file_id = ids[0]
         old = self.vault.index[file_id]["name"]
-        new = simpledialog.askstring("이름 변경", "새 파일명을 입력하세요.",
+        new = self._ask_string("이름 변경", "새 파일명을 입력하세요.",
                                      initialvalue=old, parent=self.root)
         if not new:
             return
         if Path(new).name != new:
-            messagebox.showerror("이름 확인", "파일명만 입력할 수 있습니다.", parent=self.root)
+            self._show_message("error", "이름 확인", "파일명만 입력할 수 있습니다.", parent=self.root)
             return
         ext = self.vault.index[file_id]["extension"]
         if Path(new).suffix.lower() != ext:
             new = Path(new).stem + ext
         if any(key != file_id and value["name"].casefold() == new.casefold()
                for key, value in self.vault.index.items()):
-            messagebox.showerror("이름 중복", "같은 이름의 문서가 이미 있습니다.", parent=self.root)
+            self._show_message("error", "이름 중복", "같은 이름의 문서가 이미 있습니다.", parent=self.root)
             return
         self.vault.index[file_id]["name"] = new
         self.vault.save_index()
@@ -461,56 +542,56 @@ class DigitalVaultApp:
         ])
 
     def _change_password(self):
-        old = simpledialog.askstring("비밀번호 변경", "현재 비밀번호:", show="●", parent=self.root)
+        old = self._ask_string("비밀번호 변경", "현재 비밀번호:", show="●", parent=self.root)
         if old is None:
             return
-        new = simpledialog.askstring("비밀번호 변경", "새 비밀번호 (8자 이상):", show="●", parent=self.root)
+        new = self._ask_string("비밀번호 변경", "새 비밀번호 (8자 이상):", show="●", parent=self.root)
         if new is None:
             return
         if len(new) < 8:
-            messagebox.showerror("비밀번호 확인", "비밀번호는 8자 이상이어야 합니다.", parent=self.root)
+            self._show_message("error", "비밀번호 확인", "비밀번호는 8자 이상이어야 합니다.", parent=self.root)
             return
-        confirm = simpledialog.askstring("비밀번호 변경", "새 비밀번호 확인:", show="●", parent=self.root)
+        confirm = self._ask_string("비밀번호 변경", "새 비밀번호 확인:", show="●", parent=self.root)
         if confirm != new:
-            messagebox.showerror("비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
+            self._show_message("error", "비밀번호 확인", "비밀번호가 일치하지 않습니다.", parent=self.root)
             return
         output = self._capture(lambda: self.vault.change_password(old, new))[1]
         if "실패" in output:
-            messagebox.showerror("변경 실패", output, parent=self.root)
+            self._show_message("error", "변경 실패", output, parent=self.root)
         else:
-            messagebox.showinfo("완료", "비밀번호를 변경했습니다.", parent=self.root)
+            self._show_message("info", "완료", "비밀번호를 변경했습니다.", parent=self.root)
 
     def _rotate_key(self):
-        if not messagebox.askyesno("마스터 키 재발급",
+        if not self._ask_yes_no("마스터 키 재발급",
                 "마스터 키를 새로 발급하고 모든 문서를 다시 암호화할까요?", parent=self.root):
             return
-        password = simpledialog.askstring("재인증", "현재 비밀번호:", show="●", parent=self.root)
+        password = self._ask_string("재인증", "현재 비밀번호:", show="●", parent=self.root)
         if password is None:
             return
         meta = json.loads(self.vault.meta_file.read_text(encoding="utf-8"))
         recovery = None
         if meta.get("recovery_wrapped_key"):
-            recovery = simpledialog.askstring("복구 키 확인",
+            recovery = self._ask_string("복구 키 확인",
                 "복구 기능을 유지하려면 기존 복구 키를 입력하세요:", show="●", parent=self.root)
             if recovery is None:
                 return
         try:
             self.vault.rotate_master_key(password, recovery)
-            messagebox.showinfo("완료", "마스터 키를 재발급했습니다.", parent=self.root)
+            self._show_message("info", "완료", "마스터 키를 재발급했습니다.", parent=self.root)
         except Exception as error:
-            messagebox.showerror("재발급 실패", str(error), parent=self.root)
+            self._show_message("error", "재발급 실패", str(error), parent=self.root)
 
     def _issue_recovery(self):
-        password = simpledialog.askstring("복구 키 발급", "현재 비밀번호를 입력하세요:",
+        password = self._ask_string("복구 키 발급", "현재 비밀번호를 입력하세요:",
                                           show="●", parent=self.root)
         if password is None:
             return
         try:
             key = self.vault.setup_recovery_key(password)
-            messagebox.showinfo("복구 키 발급", "아래 키를 안전한 별도 장소에 보관하세요.\n"
+            self._show_message("info", "복구 키 발급", "아래 키를 안전한 별도 장소에 보관하세요.\n"
                 "이 창을 닫으면 다시 표시되지 않습니다.\n\n" + key, parent=self.root)
         except Exception as error:
-            messagebox.showerror("발급 실패", str(error), parent=self.root)
+            self._show_message("error", "발급 실패", str(error), parent=self.root)
 
     def _show_log(self):
         output = io.StringIO()
@@ -536,35 +617,35 @@ class DigitalVaultApp:
         # 확인 후 선택 창이 반환되므로 앱에서 같은 질문을 반복하지 않는다.
         try:
             count = self.vault.create_backup(target, overwrite=True)
-            messagebox.showinfo("백업 완료", f"백업을 만들었습니다.\n포함 파일: {count}개", parent=self.root)
+            self._show_message("info", "백업 완료", f"백업을 만들었습니다.\n포함 파일: {count}개", parent=self.root)
         except Exception as error:
-            messagebox.showerror("백업 실패", str(error), parent=self.root)
+            self._show_message("error", "백업 실패", str(error), parent=self.root)
 
     def _merge_backup(self):
         archive = filedialog.askopenfilename(title="불러올 백업 선택",
             filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")], parent=self.root)
         if not archive:
             return
-        password = simpledialog.askstring("백업 인증", "백업 당시 금고 비밀번호:",
+        password = self._ask_string("백업 인증", "백업 당시 금고 비밀번호:",
                                            show="●", parent=self.root)
         if password is None:
             return
         try:
             count = self.vault.merge_backup(archive, password)
             self._refresh_documents()
-            messagebox.showinfo("백업 불러오기 완료",
+            self._show_message("info", "백업 불러오기 완료",
                 f"문서 {count}개를 현재 금고에 병합했습니다.\n기존 문서는 유지됩니다.", parent=self.root)
         except Exception as error:
-            messagebox.showerror("백업 불러오기 실패", str(error), parent=self.root)
+            self._show_message("error", "백업 불러오기 실패", str(error), parent=self.root)
 
     def _integrity_check(self):
         result, output = self._capture(self.vault.integrity_check)
         self._text_window("무결성 검사 결과", output)
         if result:
-            messagebox.showinfo("검사 완료", "모든 문서의 무결성 검사가 정상적으로 완료되었습니다.",
+            self._show_message("info", "검사 완료", "모든 문서의 무결성 검사가 정상적으로 완료되었습니다.",
                                 parent=self.root)
         else:
-            messagebox.showwarning("확인 필요", "일부 항목에서 문제가 발견되었습니다. 결과를 확인하세요.",
+            self._show_message("warning", "확인 필요", "일부 항목에서 문제가 발견되었습니다. 결과를 확인하세요.",
                                    parent=self.root)
 
     def _vault_info(self):
@@ -581,7 +662,7 @@ class DigitalVaultApp:
             f"복구 키: {'설정됨' if meta.get('recovery_wrapped_key') else '미설정'}\n\n"
             f"저장 위치:\n{self.vault.folder}"
         )
-        messagebox.showinfo("금고 정보", text, parent=self.root)
+        self._show_message("info", "금고 정보", text, parent=self.root)
 
     def _text_window(self, title, text):
         window = tk.Toplevel(self.root)

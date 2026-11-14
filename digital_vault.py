@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -26,6 +27,8 @@ EXTENSIONS = {".pdf", ".docx", ".txt", ".pptx", ".xlsx", ".jpg", ".jpeg", ".png"
 MAX_TRIES = 5
 LOCK_SECONDS = 60
 FORMAT_VERSION = 2
+AUTO_BACKUP_RETENTION_DAYS = 7
+AUTO_BACKUP_FOLDER_NAME = "DigitalVault_Backups"
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
 WRAP_AAD = b"DigitalVault:master-key:v2"
@@ -1077,6 +1080,44 @@ class Vault:
         self.log_event("backup_created")
         return len(files)
 
+    def cleanup_automatic_backups(self, retention_days=AUTO_BACKUP_RETENTION_DAYS, now=None):
+        """보관 기간이 지난 앱 생성 자동 백업만 안전하게 정리합니다."""
+        if not isinstance(retention_days, int) or retention_days < 1:
+            raise ValueError("자동 백업 보관 기간은 1일 이상이어야 합니다.")
+        backup_dir = self.folder.parent / AUTO_BACKUP_FOLDER_NAME / self.folder.name
+        if not backup_dir.is_dir():
+            return 0
+        current_time = time.time() if now is None else float(now)
+        cutoff = current_time - retention_days * 24 * 60 * 60
+        deleted = 0
+        pattern = re.compile(r"auto-\d{8}-\d{6}(?:-\d+)?\.zip")
+        for candidate in backup_dir.iterdir():
+            if not pattern.fullmatch(candidate.name) or candidate.is_symlink():
+                continue
+            try:
+                if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+                    deleted += 1
+            except FileNotFoundError:
+                continue
+        return deleted
+
+    def create_automatic_backup(self, retention_days=AUTO_BACKUP_RETENTION_DAYS):
+        """금고와 분리된 폴더에 자동 백업을 만들고 보관 기간을 적용합니다."""
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 자동 백업을 만들 수 있습니다.")
+        backup_dir = self.folder.parent / AUTO_BACKUP_FOLDER_NAME / self.folder.name
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destination = backup_dir / f"auto-{stamp}.zip"
+        suffix = 1
+        while destination.exists():
+            destination = backup_dir / f"auto-{stamp}-{suffix}.zip"
+            suffix += 1
+        self.create_backup(destination)
+        deleted = self.cleanup_automatic_backups(retention_days=retention_days)
+        return {"path": destination, "deleted": deleted}
+
     def inspect_backup(self, archive_path, backup_password):
         """백업 전체를 검증·복호화하고 현재 금고와의 문서명 충돌을 미리 계산합니다."""
         if self.key is None:
@@ -1131,28 +1172,53 @@ class Vault:
         existing = {}
         for file_id, info in self.index.items():
             existing.setdefault(info.get("name", "").casefold(), (file_id, info))
-        seen_names, documents = set(), []
+        seen_source_names, documents = set(), []
         for old_id, info in source_index.items():
             if (not isinstance(old_id, str) or len(old_id) != 24
                     or any(ch not in "0123456789abcdef" for ch in old_id)
                     or not isinstance(info, dict)):
                 raise ValueError("백업 문서 식별자 또는 정보가 올바르지 않습니다.")
             name, extension = info.get("name"), info.get("extension")
-            if (not isinstance(name, str) or not name or Path(name).name != name
-                    or not isinstance(extension, str) or extension.lower() not in EXTENSIONS
-                    or Path(name).suffix.lower() != extension.lower()
-                    or name.casefold() in seen_names):
-                raise ValueError("백업에 유효하지 않거나 중복된 문서명이 있습니다.")
-            seen_names.add(name.casefold())
+
+            def invalid_document_name(reason, display_name=name):
+                return ValueError(
+                    "백업 문서명이 올바르지 않습니다.\n"
+                    f"문서명: {display_name!r}\n"
+                    f"원인: {reason}"
+                )
+
+            if not isinstance(name, str):
+                raise invalid_document_name("문서명이 문자열 형식이 아닙니다.")
+            if not name:
+                raise invalid_document_name("문서명이 비어 있습니다.")
+            if (Path(name).name != name or "/" in name or "\\" in name
+                    or name in {".", ".."}):
+                raise invalid_document_name("문서명에 폴더 경로 또는 사용할 수 없는 경로 문자가 포함되어 있습니다.")
+            if not isinstance(extension, str) or extension.lower() not in EXTENSIONS:
+                raise invalid_document_name(
+                    f"지원하지 않는 파일 형식입니다: {extension!r}"
+                )
+            actual_extension = Path(name).suffix.lower()
+            if actual_extension != extension.lower():
+                raise invalid_document_name(
+                    f"파일명 확장자({actual_extension or '없음'})와 "
+                    f"저장된 형식({extension})이 일치하지 않습니다."
+                )
+            normalized_name = name.casefold()
+            duplicate_in_backup = normalized_name in seen_source_names
+            seen_source_names.add(normalized_name)
+            collision = (
+                existing.get(normalized_name) if not duplicate_in_backup else None
+            )
             source_path = f"documents/{old_id}.bin"
             if source_path not in payloads:
                 raise ValueError(f"백업 문서 파일이 없습니다: {name}")
             aad = ("DigitalVault:document:v2:" + old_id).encode()
             plain = decrypt(source_key, payloads[source_path], aad)
-            collision = existing.get(name.casefold())
             documents.append({
-                "id": old_id, "name": name, "extension": extension.lower(),
-                "size": len(plain),
+                "id": old_id, "name": name,
+                "duplicate_in_backup": duplicate_in_backup,
+                "extension": extension.lower(), "size": len(plain),
                 "collision_id": collision[0] if collision else None,
                 "collision_name": collision[1].get("name") if collision else None,
             })
@@ -1160,26 +1226,30 @@ class Vault:
         expected_docs = {f"documents/{doc['id']}.bin" for doc in documents}
         if extra_docs != expected_docs:
             raise ValueError("백업 문서 목록과 실제 문서 파일이 일치하지 않습니다.")
-        collisions = sum(1 for doc in documents if doc["collision_id"])
+        duplicate_count = sum(1 for doc in documents if doc["duplicate_in_backup"])
+        collisions = sum(
+            1 for doc in documents
+            if not doc["duplicate_in_backup"] and doc["collision_id"]
+        )
         return {
             "created_utc": manifest.get("created_utc", ""),
             "document_count": len(documents),
-            "new_count": len(documents) - collisions,
+            "new_count": len(documents) - duplicate_count - collisions,
             "collision_count": collisions,
+            "duplicate_count": duplicate_count,
             "documents": documents,
         }
 
-    def merge_backup(self, archive_path, backup_password, conflict_choices=None):
-        """검증된 백업을 현재 금고에 병합하고 선택된 충돌 문서만 교체합니다."""
+    def merge_backup(self, archive_path, backup_password):
+        """검증된 백업을 병합하며 기존 문서와 이름 충돌 시 현재 문서를 유지합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 백업을 병합할 수 있습니다.")
-        conflict_choices = conflict_choices or {}
         preview = self.inspect_backup(archive_path, backup_password)
         staged_dir = Path(tempfile.mkdtemp(prefix=".vault-merge-", dir=self.folder))
         previous_index = self.index.copy()
-        staged_new, staged_replace = {}, {}
-        applied_new, applied_replace = [], []
-        added = replaced = skipped = 0
+        staged_new = {}
+        applied_new = []
+        added = replaced = skipped = duplicate_skipped = 0
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
                 manifest = json.loads(archive.read("backup_manifest.json"))
@@ -1204,66 +1274,42 @@ class Vault:
                 info.get("name", "").casefold(): (file_id, info)
                 for file_id, info in self.index.items()
             }
-            used_names = set(existing_by_name)
             staged_index = previous_index.copy()
 
+            seen_source_names = set()
             for old_id, info in source_index.items():
                 name = info["name"]
-                collision = existing_by_name.get(name.casefold())
+                normalized_name = name.casefold()
+                if normalized_name in seen_source_names:
+                    duplicate_skipped += 1
+                    continue
+                seen_source_names.add(normalized_name)
+                collision = existing_by_name.get(normalized_name)
                 source_aad = ("DigitalVault:document:v2:" + old_id).encode()
                 plain = decrypt(source_key, payloads[f"documents/{old_id}.bin"], source_aad)
                 if collision:
-                    choice = conflict_choices.get(old_id, "keep")
-                    if choice not in {"keep", "replace"}:
-                        raise ValueError("알 수 없는 문서 충돌 처리 방식입니다.")
-                    if choice == "keep":
-                        skipped += 1
-                        continue
-                    target_id, target_info = collision
-                    target_aad = ("DigitalVault:document:v2:" + target_id).encode()
-                    staged_replace[target_id] = encrypt(self.key, plain, target_aad)
-                    staged_index[target_id] = {
-                        "name": target_info["name"],
-                        "extension": target_info["extension"],
-                    }
-                    replaced += 1
+                    skipped += 1
                     continue
 
-                new_name = name
-                if new_name.casefold() in used_names:
-                    stem, suffix = Path(name).stem, Path(name).suffix
-                    number = 1
-                    while f"{stem} (복원 {number}){suffix}".casefold() in used_names:
-                        number += 1
-                    new_name = f"{stem} (복원 {number}){suffix}"
-                used_names.add(new_name.casefold())
                 new_id = secrets.token_hex(12)
                 while new_id in staged_index:
                     new_id = secrets.token_hex(12)
                 new_aad = ("DigitalVault:document:v2:" + new_id).encode()
                 staged_new[new_id] = encrypt(self.key, plain, new_aad)
                 staged_index[new_id] = {
-                    "name": new_name, "extension": info["extension"].lower()
+                    "name": name, "extension": info["extension"].lower()
                 }
                 added += 1
 
             for file_id, data in staged_new.items():
                 (staged_dir / (file_id + ".new")).write_bytes(data)
-            for file_id, data in staged_replace.items():
-                (staged_dir / (file_id + ".new")).write_bytes(data)
-                original = (self.docs / (file_id + ".bin")).read_bytes()
-                (staged_dir / (file_id + ".old")).write_bytes(original)
             (staged_dir / "index.old").write_bytes(self.index_file.read_bytes())
             journal_path = self.folder / ".merge-recovery.json"
             write_json(journal_path, {
                 "state": "applying", "stage": staged_dir.name,
-                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+                "new_ids": list(staged_new),
             })
 
-            # 원본 파일과 인덱스 백업을 먼저 기록한 뒤 실제 문서를 교체합니다.
-            for file_id in staged_replace:
-                os.replace(staged_dir / (file_id + ".new"), self.docs / (file_id + ".bin"))
-                applied_replace.append(file_id)
             for file_id in staged_new:
                 target = self.docs / (file_id + ".bin")
                 if target.exists():
@@ -1275,10 +1321,11 @@ class Vault:
             self.save_index()
             write_json(journal_path, {
                 "state": "committed", "stage": staged_dir.name,
-                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+                "new_ids": list(staged_new),
             })
             self.last_merge_summary = {
-                "added": added, "replaced": replaced, "skipped": skipped,
+                "added": added, "replaced": 0, "skipped": skipped,
+                "duplicate_skipped": duplicate_skipped,
             }
             try:
                 self.log_event("backup_merged")
@@ -1289,10 +1336,6 @@ class Vault:
             self.index = previous_index
             for file_id in applied_new:
                 (self.docs / (file_id + ".bin")).unlink(missing_ok=True)
-            for file_id in applied_replace:
-                backup = staged_dir / (file_id + ".old")
-                if backup.exists():
-                    os.replace(backup, self.docs / (file_id + ".bin"))
             try:
                 self.save_index()
                 if "journal_path" in locals():

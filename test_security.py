@@ -305,6 +305,36 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 vault.export_security_log(root / "locked.csv")
 
+    def test_automatic_backup_is_separate_and_expires_after_seven_days(self):
+        import os
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("auto-backup-password-123")
+            result = vault.create_automatic_backup()
+            backup_dir = root / "DigitalVault_Backups" / "vault"
+            self.assertEqual(result["path"].parent, backup_dir)
+            self.assertTrue(result["path"].is_file())
+            self.assertFalse((vault.folder / "DigitalVault_Backups").exists())
+
+            old_backup = backup_dir / "auto-20200101-000000.zip"
+            old_backup.write_bytes(b"old")
+            os.utime(old_backup, (time.time() - 8 * 86400,) * 2)
+            recent_backup = backup_dir / "auto-20200102-000000.zip"
+            recent_backup.write_bytes(b"recent")
+            os.utime(recent_backup, (time.time() - 6 * 86400,) * 2)
+            unrelated = backup_dir / "manual-export.zip"
+            unrelated.write_bytes(b"keep")
+            os.utime(unrelated, (time.time() - 30 * 86400,) * 2)
+
+            deleted = vault.cleanup_automatic_backups(retention_days=7)
+            self.assertEqual(deleted, 1)
+            self.assertFalse(old_backup.exists())
+            self.assertTrue(recent_backup.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(vault.integrity_check())
+
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -346,7 +376,117 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 target.inspect_backup(backup, "wrong-password-123")
 
-    def test_backup_merge_conflict_keep_and_replace(self):
+    def test_backup_preview_explains_invalid_document_names(self):
+        import tempfile
+
+        cases = [
+            ("path", "../outside.txt", ".txt", "경로"),
+            ("extension", "report.pdf", ".txt", "확장자"),
+            ("unsupported", "program.exe", ".exe", "지원하지 않는 파일 형식"),
+        ]
+        for case, invalid_name, extension, expected_reason in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                vault = Vault(root / "vault")
+                password = "backup-validation-password-123"
+                vault.create(password)
+
+                first = root / "first.txt"
+                first.write_text("first document", encoding="utf-8")
+                vault.add_document(first)
+
+                file_id = next(iter(vault.index))
+                vault.index[file_id]["name"] = invalid_name
+                vault.index[file_id]["extension"] = extension
+                vault.save_index()
+
+                backup = root / "invalid-name-backup.zip"
+                vault.create_backup(backup)
+                with self.assertRaises(ValueError) as caught:
+                    vault.inspect_backup(backup, password)
+
+                message = str(caught.exception)
+                self.assertIn("문서명:", message)
+                self.assertIn("원인:", message)
+                self.assertIn(expected_reason, message)
+                self.assertIn(repr(invalid_name), message)
+
+    def test_backup_preview_marks_duplicate_names_for_exclusion(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            password = "source-duplicate-password-123"
+            source.create(password)
+
+            for index in range(3):
+                document = root / f"duplicate-{index}.xlsx"
+                document.write_text(f"document {index}", encoding="utf-8")
+                source.add_document(document)
+                source.index[next(reversed(source.index))]["name"] = "배당금 계산.xlsx"
+                source.save_index()
+
+            backup = root / "duplicate-names.zip"
+            source.create_backup(backup)
+            target = Vault(root / "target")
+            target.create("target-duplicate-password-123")
+
+            preview = target.inspect_backup(backup, password)
+            self.assertEqual(preview["document_count"], 3)
+            self.assertEqual(preview["collision_count"], 0)
+            self.assertEqual(preview["new_count"], 1)
+            self.assertEqual(preview["duplicate_count"], 2)
+            self.assertEqual(
+                [doc["duplicate_in_backup"] for doc in preview["documents"]],
+                [False, True, True],
+            )
+
+    def test_backup_merge_skips_duplicate_names_and_keeps_first_document(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            password = "source-duplicate-merge-password-123"
+            source.create(password)
+            expected_contents = []
+            for index in range(3):
+                document = root / f"duplicate-{index}.xlsx"
+                content = f"unique document content {index}"
+                document.write_text(content, encoding="utf-8")
+                expected_contents.append(content.encode("utf-8"))
+                source.add_document(document)
+                source.index[next(reversed(source.index))]["name"] = "배당금 계산.xlsx"
+                source.save_index()
+
+            backup = root / "duplicate-merge.zip"
+            source.create_backup(backup)
+            target = Vault(root / "target")
+            target.create("target-duplicate-merge-password-123")
+
+            target.merge_backup(backup, password)
+            self.assertEqual(len(target.index), 1)
+            self.assertEqual(
+                {info["name"] for info in target.index.values()},
+                {"배당금 계산.xlsx"},
+            )
+            self.assertEqual(target.last_merge_summary["added"], 1)
+            self.assertEqual(target.last_merge_summary["duplicate_skipped"], 2)
+            restored_contents = []
+            for file_id in target.index:
+                aad = ("DigitalVault:document:v2:" + file_id).encode()
+                restored_contents.append(
+                    decrypt(
+                        target.key,
+                        (target.docs / (file_id + ".bin")).read_bytes(),
+                        aad,
+                    )
+                )
+            self.assertEqual(restored_contents, [expected_contents[0]])
+            self.assertTrue(target.integrity_check())
+
+    def test_backup_merge_conflict_always_keeps_current_document(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = Vault(root / "source")
@@ -364,7 +504,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             target.add_document(target_doc)
             target_id = next(iter(target.index))
 
-            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "keep"})
+            target.merge_backup(backup, "source-password-123")
             self.assertEqual(target.last_merge_summary["skipped"], 1)
             current = decrypt(
                 target.key, (target.docs / (target_id + ".bin")).read_bytes(),
@@ -372,13 +512,13 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             )
             self.assertEqual(current, b"current version")
 
-            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "replace"})
-            self.assertEqual(target.last_merge_summary["replaced"], 1)
-            replaced = decrypt(
+            target.merge_backup(backup, "source-password-123")
+            self.assertEqual(target.last_merge_summary["skipped"], 1)
+            still_current = decrypt(
                 target.key, (target.docs / (target_id + ".bin")).read_bytes(),
                 ("DigitalVault:document:v2:" + target_id).encode()
             )
-            self.assertEqual(replaced, b"backup version")
+            self.assertEqual(still_current, b"current version")
             self.assertEqual(len(target.index), 1)
 
     def test_security_log_chain_detects_tampering_and_survives_key_rotation(self):

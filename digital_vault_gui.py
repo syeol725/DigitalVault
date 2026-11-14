@@ -56,7 +56,7 @@ class DigitalVaultApp:
     def _auto_lock(self):
         self._idle_lock_after_id = None
         if self.vault is not None and self.vault.key is not None:
-            self._lock(show_notice=True)
+            self._lock()
 
     def _cancel_idle_lock(self):
         if self._idle_lock_after_id is not None:
@@ -754,7 +754,6 @@ class DigitalVaultApp:
             ("마스터 키 재발급", self._rotate_key),
             ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
-            ("보안 기록 무결성 검사", self._verify_security_log),
             ("보안 기록 CSV 내보내기", self._export_security_log),
         ])
 
@@ -823,20 +822,6 @@ class DigitalVaultApp:
             self.vault.show_security_log()
         self._text_window("보안 기록", output.getvalue())
 
-    def _verify_security_log(self):
-        try:
-            result, output = self._capture(self.vault.verify_security_log)
-            title = "보안 기록 검사 결과"
-            if result:
-                message = output or "보안 기록 검사가 완료되었습니다."
-                kind = "info"
-            else:
-                message = output or "보안 기록에서 이상이 발견되었습니다."
-                kind = "warning"
-            self._show_message(kind, title, message, parent=self.root)
-        except Exception as error:
-            self._show_message("error", "보안 기록 검사 실패", str(error), parent=self.root)
-
     def _export_security_log(self):
         destination = filedialog.asksaveasfilename(
             title="보안 기록 CSV 저장",
@@ -889,108 +874,110 @@ class DigitalVaultApp:
         window.title("백업 복원 미리보기")
         window.configure(bg="#F5F7FB")
         window.transient(self.root)
-        window.geometry("900x620")
-        window.minsize(760, 500)
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        window_width = min(1000, max(680, screen_width - 80))
+        window_height = min(720, max(480, screen_height - 100))
+        window.geometry(f"{window_width}x{window_height}")
+        window.minsize(min(680, screen_width - 40), min(480, screen_height - 60))
 
         card = tk.Frame(window, bg="#FFFFFF", padx=22, pady=18)
         card.pack(fill="both", expand=True, padx=14, pady=14)
         tk.Label(card, text="백업 복원 미리보기", bg="#FFFFFF", fg="#202938",
                  font=("Malgun Gothic", 16, "bold")).pack(anchor="w")
+
+        duplicate_count = preview.get("duplicate_count", sum(
+            1 for doc in preview["documents"] if doc.get("duplicate_in_backup")
+        ))
         summary = (
             f"백업 문서 {preview['document_count']}개  ·  신규 {preview['new_count']}개  ·  "
-            f"이름 충돌 {preview['collision_count']}개\n"
-            "충돌 항목은 처리 칸을 더블클릭해 선택하세요. 기본값은 기존 문서 유지입니다."
+            f"이름 충돌 {preview['collision_count']}개  ·  백업 내 중복 {duplicate_count}개(복원 제외)\n"
+            "이름이 겹치는 문서는 현재 금고의 문서를 유지하고, 백업 내부 중복 문서는 복원하지 않습니다."
         )
         tk.Label(card, text=summary, bg="#FFFFFF", fg="#667085",
-                 font=("Malgun Gothic", 9), justify="left", wraplength=820
+                 font=("Malgun Gothic", 9), justify="left", wraplength=900
                  ).pack(anchor="w", pady=(8, 14))
+
+        source_by_iid = {}
+        actions = tk.Frame(card, bg="#FFFFFF")
+        actions.pack(side="bottom", fill="x")
+        ttk.Button(actions, text="취소", command=window.destroy).pack(
+            side="right", padx=(8, 0)
+        )
+        note = tk.Label(
+            card,
+            text="복원 적용을 누르면 신규 문서만 추가됩니다. 기존 금고와 이름이 겹치는 문서는 현재 문서를 유지하고, "
+                 "백업 내부 중복 문서는 복원 대상에서 제외됩니다.",
+            bg="#FFFFFF", fg="#667085", font=("Malgun Gothic", 8),
+            wraplength=900, justify="left"
+        )
+        note.pack(side="bottom", anchor="w", pady=(12, 8))
 
         table_frame = tk.Frame(card, bg="#FFFFFF")
         table_frame.pack(fill="both", expand=True)
-        columns = ("name", "extension", "size", "state", "choice")
+        columns = ("name", "extension", "size", "state", "action")
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
         headings = {
-            "name": ("파일명", 330, "w"),
-            "extension": ("형식", 90, "center"),
+            "name": ("백업 파일명", 280, "w"),
+            "extension": ("형식", 80, "center"),
             "size": ("백업 크기", 110, "e"),
-            "state": ("비교 결과", 110, "center"),
-            "choice": ("충돌 처리", 150, "center"),
+            "state": ("비교 결과", 150, "center"),
+            "action": ("복원 처리", 150, "center"),
         }
         for column, (label, width, anchor) in headings.items():
             tree.heading(column, text=label)
-            tree.column(column, width=width, anchor=anchor, stretch=(column == "name"))
+            tree.column(column, width=width, anchor=anchor,
+                        stretch=(column == "name"))
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
         tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
-        source_by_iid = {}
         for doc in preview["documents"]:
             collision = bool(doc["collision_id"])
+            duplicate = bool(doc.get("duplicate_in_backup"))
+            state = "백업 내 중복" if duplicate else (
+                "이름 충돌" if collision else "신규 문서"
+            )
+            action = "복원 제외" if duplicate else (
+                "기존 문서 유지" if collision else "추가 예정"
+            )
             iid = tree.insert("", "end", values=(
-                doc["name"], doc["extension"].upper(), f"{doc['size']:,} B",
-                "이름 충돌" if collision else "신규 문서",
-                "기존 문서 유지" if collision else "추가 예정",
+                doc["name"], doc["extension"].upper().lstrip("."),
+                f"{doc['size']:,} B", state, action,
             ))
             source_by_iid[iid] = doc
-        def toggle_choice(event):
-            iid = tree.identify_row(event.y)
-            column = tree.identify_column(event.x)
-            if not iid or column != "#5":
-                return
-            doc = source_by_iid[iid]
-            if not doc["collision_id"]:
-                return
-            values = list(tree.item(iid, "values"))
-            values[4] = "백업 문서로 교체" if values[4] == "기존 문서 유지" else "기존 문서 유지"
-            tree.item(iid, values=values)
-        tree.bind("<Double-1>", toggle_choice)
 
-        note = tk.Label(card,
-            text="※ 백업 문서는 암호화 해제 검증까지 완료된 경우에만 표시됩니다. 병합 전 현재 금고를 자동 백업합니다.",
-            bg="#FFFFFF", fg="#667085", font=("Malgun Gothic", 8),
-            wraplength=820, justify="left")
-        note.pack(anchor="w", pady=(12, 8))
-
-        actions = tk.Frame(card, bg="#FFFFFF")
-        actions.pack(fill="x")
-        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
         def apply_merge():
-            choices = {}
-            for iid, doc in source_by_iid.items():
-                if doc["collision_id"]:
-                    value = tree.item(iid, "values")[4]
-                    choices[doc["id"]] = "replace" if value == "백업 문서로 교체" else "keep"
+            if preview["new_count"] == 0:
+                window.destroy()
+                self._show_message(
+                    "info", "복원할 문서 없음",
+                    "복원할 신규 문서가 없습니다.\n현재 금고의 기존 문서는 그대로 유지됩니다.",
+                    parent=self.root
+                )
+                return
             if not self._ask_yes_no(
                 "복원 확인",
-                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\n"
-                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개입니다.\n"
+                f"현재 금고의 기존 문서는 유지하고 신규 문서만 추가합니다.\n"
+                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개, "
+                f"중복 제외 {duplicate_count}개입니다.\n"
                 "계속할까요?",
                 parent=window
             ):
                 return
             window.destroy()
-            self._apply_backup_merge(archive, password, choices)
-        ttk.Button(actions, text="복원 진행", style="Accent.TButton",
+            self._apply_backup_merge(archive, password)
+
+        ttk.Button(actions, text="복원 적용", style="Accent.TButton",
                    command=apply_merge).pack(side="right")
         window.grab_set()
         window.focus_set()
 
-    def _apply_backup_merge(self, archive, password, choices):
+    def _apply_backup_merge(self, archive, password):
         try:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            safety_path = self.vault.folder.parent / (
-                f"{self.vault.folder.name}-pre-restore-{stamp}.zip"
-            )
-            suffix = 1
-            while safety_path.exists():
-                safety_path = self.vault.folder.parent / (
-                    f"{self.vault.folder.name}-pre-restore-{stamp}-{suffix}.zip"
-                )
-                suffix += 1
             current_count = len(self.vault.index)
-            self.vault.create_backup(safety_path)
-            count = self.vault.merge_backup(archive, password, choices)
+            count = self.vault.merge_backup(archive, password)
             self._refresh_documents()
             summary = getattr(self.vault, "last_merge_summary", {})
             self._show_message(
@@ -998,8 +985,8 @@ class DigitalVaultApp:
                 f"신규 추가: {summary.get('added', count)}개\n"
                 f"기존 문서 교체: {summary.get('replaced', 0)}개\n"
                 f"기존 문서 유지: {summary.get('skipped', 0)}개\n"
-                f"복원 전 자동 백업: {safety_path}\n"
-                f"기존 금고 문서 {current_count}개는 보존 기준으로 처리했습니다.",
+                f"백업 내 중복 제외: {summary.get('duplicate_skipped', 0)}개\n"
+                f"기존 금고 문서 {current_count}개는 보존했습니다.",
                 parent=self.root
             )
         except Exception as error:
@@ -1077,23 +1064,38 @@ class DigitalVaultApp:
         widget.insert("1.0", text or "표시할 내용이 없습니다.")
         widget.configure(state="disabled")
 
-    def _lock(self, show_notice=False):
+    def _lock(self):
         self._cancel_idle_lock()
+        backup_error = None
         if self.vault and self.vault.key is not None:
+            try:
+                self.vault.create_automatic_backup()
+            except Exception as error:
+                backup_error = str(error)
             self.vault.lock()
         self.vault = None
         self._clear()
         self._login_screen()
-        if show_notice:
+        if backup_error:
             self._show_message(
-                "info", "자동 잠금",
-                "5분 동안 사용하지 않아 금고를 자동으로 잠갔습니다.\n다시 사용하려면 비밀번호를 입력하세요.",
+                "warning", "자동 백업 실패",
+                "금고는 잠겼지만 자동 백업을 만들지 못했습니다.\n"
+                f"오류: {backup_error}",
                 parent=self.root
             )
 
     def _close(self):
         self._cancel_idle_lock()
         if self.vault and self.vault.key is not None:
+            try:
+                self.vault.create_automatic_backup()
+            except Exception as error:
+                self._show_message(
+                    "warning", "자동 백업 실패",
+                    "금고를 종료하지만 자동 백업을 만들지 못했습니다.\n"
+                    f"오류: {error}",
+                    parent=self.root
+                )
             self.vault.lock()
         self.root.destroy()
 

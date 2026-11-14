@@ -216,6 +216,25 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertFalse(any(name.lower().endswith(("readme.md", ".exe", ".py"))
                                  for name in names))
 
+    def test_backup_overwrite_requires_confirmation_flag(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("backup-password-123")
+            backup = root / "vault-backup.zip"
+            vault.create_backup(backup)
+
+            with self.assertRaises(FileExistsError):
+                vault.create_backup(backup)
+
+            backup.write_bytes(b"old backup placeholder")
+            count = vault.create_backup(backup, overwrite=True)
+            self.assertGreaterEqual(count, 2)
+            with zipfile.ZipFile(backup, "r") as archive:
+                self.assertIn("backup_manifest.json", archive.namelist())
+                self.assertIn("vault.json", archive.namelist())
+
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

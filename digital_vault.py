@@ -143,7 +143,10 @@ def masked_password(prompt):
         old_settings = termios.tcgetattr(fd)
         chars = []
         try:
-            tty.setraw(fd)
+            tty.setcbreak(fd)
+            input_settings = termios.tcgetattr(fd)
+            input_settings[3] &= ~termios.ECHO
+            termios.tcsetattr(fd, termios.TCSADRAIN, input_settings)
             while True:
                 char = sys.stdin.read(1)
                 if char in ("\r", "\n"):

@@ -90,6 +90,40 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertEqual(len(session.index), 1)
             self.assertTrue(session.integrity_check())
 
+
+    def test_backup_merge_keeps_open_vault_and_existing_documents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_vault = Vault(root / "source")
+            source_vault.create("source-backup-password-123")
+            source_file = root / "shared.txt"
+            source_file.write_text("from backup", encoding="utf-8")
+            source_vault.add_document(source_file)
+            backup = root / "source-backup.zip"
+            source_vault.create_backup(backup)
+
+            target_vault = Vault(root / "target")
+            target_vault.create("target-password-456")
+            target_file = root / "shared.txt"
+            target_file.write_text("already in target", encoding="utf-8")
+            target_vault.add_document(target_file)
+            original_id = next(iter(target_vault.index))
+
+            merged = target_vault.merge_backup(backup, "source-backup-password-123")
+            self.assertEqual(merged, 1)
+            self.assertIsNotNone(target_vault.key)
+            self.assertEqual(len(target_vault.index), 2)
+            self.assertIn(original_id, target_vault.index)
+            self.assertEqual(
+                {item["name"] for item in target_vault.index.values()},
+                {"shared.txt", "shared (복원 1).txt"},
+            )
+            self.assertTrue(target_vault.integrity_check())
+
+            reopened = Vault(root / "target")
+            self.assertTrue(reopened.login("target-password-456"))
+            self.assertEqual(len(reopened.index), 2)
+
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

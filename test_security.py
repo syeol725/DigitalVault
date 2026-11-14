@@ -140,6 +140,37 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             after_recovery = Vault(root / "vault")
             self.assertTrue(after_recovery.login("recovered-after-rotation-987"))
 
+    def test_lock_then_new_session_can_log_in_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "vault"
+            first = Vault(folder)
+            first.create("relogin-password-123")
+            source = Path(directory) / "relogin.txt"
+            source.write_text("still here", encoding="utf-8")
+            first.add_document(source)
+
+            first.lock()
+            self.assertIsNone(first.key)
+            self.assertEqual(first.index, {})
+
+            second = Vault(folder)
+            self.assertTrue(second.login("relogin-password-123"))
+            self.assertEqual(len(second.index), 1)
+            self.assertTrue(second.integrity_check())
+
+    def test_gui_clear_resets_tree_reference_before_relogin(self):
+        from digital_vault_gui import DigitalVaultApp
+
+        class FakeRoot:
+            def winfo_children(self):
+                return []
+
+        app = DigitalVaultApp.__new__(DigitalVaultApp)
+        app.root = FakeRoot()
+        app.tree = object()
+        app._clear()
+        self.assertIsNone(app.tree)
+
     def test_kdf_rejects_untrusted_parameters(self):
         with self.assertRaises(ValueError):
             derive_key("password", b"0123456789abcdef",

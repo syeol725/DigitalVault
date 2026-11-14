@@ -27,6 +27,7 @@ FORMAT_VERSION = 2
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
 IDLE_TIMEOUT_SECONDS = 300
+SESSION_DEADLINE = None
 WRAP_AAD = b"DigitalVault:master-key:v2"
 INDEX_AAD = b"DigitalVault:index:v2"
 
@@ -94,13 +95,37 @@ def decrypt(key, data, aad=None):
     return AESGCM(key).decrypt(data[:12], data[12:], aad)
 
 
+def start_session_timer():
+    global SESSION_DEADLINE
+    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
+
+
+def remaining_session_seconds():
+    if SESSION_DEADLINE is None:
+        return IDLE_TIMEOUT_SECONDS
+    return max(0, int(SESSION_DEADLINE - time.monotonic() + 0.999))
+
+
 def timed_input(prompt, timeout):
-    """메뉴 입력을 제한 시간 동안 기다립니다. 시간 초과 시 None을 반환합니다."""
-    print(prompt, end="", flush=True)
-    deadline, chars = time.monotonic() + timeout, []
+    """세션의 남은 자동 잠금 시간을 표시하며 입력을 기다립니다."""
+    global SESSION_DEADLINE
+    chars = []
+    if SESSION_DEADLINE is None:
+        SESSION_DEADLINE = time.monotonic() + timeout
+    last_rendered = 0
+
+    def render():
+        nonlocal last_rendered
+        remaining = remaining_session_seconds()
+        line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
+        sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
+        sys.stdout.flush()
+        last_rendered = len(line)
+
     if os.name == "nt":
         import msvcrt
-        while time.monotonic() < deadline:
+        while remaining_session_seconds() > 0:
+            render()
             if msvcrt.kbhit():
                 ch = msvcrt.getwch()
                 code = ord(ch)
@@ -109,27 +134,32 @@ def timed_input(prompt, timeout):
                     return "".join(chars)
                 if code == 3:
                     raise KeyboardInterrupt
+                if code in (0, 224):
+                    msvcrt.getwch()
+                    continue
                 if code == 8:
                     if chars:
                         chars.pop()
-                        print(chr(8) + " " + chr(8), end="", flush=True)
                 elif ch.isprintable():
                     chars.append(ch)
-                    print(ch, end="", flush=True)
+                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
             else:
-                time.sleep(0.05)
+                time.sleep(0.1)
     else:
         import select
         import termios
         import tty
         if not sys.stdin.isatty():
-            return input()
+            return input(prompt)
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
-            while time.monotonic() < deadline:
-                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            while remaining_session_seconds() > 0:
+                render()
+                ready, _, _ = select.select(
+                    [sys.stdin], [], [], min(0.2, remaining_session_seconds())
+                )
                 if not ready:
                     continue
                 ch = os.read(fd, 1).decode("utf-8", errors="ignore")
@@ -142,16 +172,16 @@ def timed_input(prompt, timeout):
                 if code in (8, 127):
                     if chars:
                         chars.pop()
-                        print(chr(8) + " " + chr(8), end="", flush=True)
                 elif code == 3:
                     raise KeyboardInterrupt
                 elif ch.isprintable():
                     chars.append(ch)
-                    print(ch, end="", flush=True)
+                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
     print()
-    print("입력 대기 시간이 초과되어 금고를 잠급니다.")
+    print("미사용 시간이 초과되어 금고를 잠급니다.")
     return None
 
 
@@ -189,36 +219,35 @@ def pad_display(value, width, align="left"):
     return value + " " * padding
 
 
-def show_main_menu():
-    width = 72
-    inner = width - 4
-    lines = [
-        ("DigitalVault", "title"),
-        ("", "space"),
-        ("[ 문서 관리 ]", "section"),
-        ("1. 문서 추가       2. 문서 목록", "item"),
-        ("3. 문서 열기       4. 문서 내보내기", "item"),
-        ("5. 문서 삭제       6. 문서 이름 변경", "item"),
-        ("", "space"),
-        ("[ 보안 관리 ]", "section"),
-        ("7. 비밀번호 변경   8. 마스터 키 재발급", "item"),
-        ("9. 복구 키 발급   10. 보안 기록 확인", "item"),
-        ("", "space"),
-        ("[ 금고 관리 ]", "section"),
-        ("11. 금고 백업     12. 금고 복원", "item"),
-        ("13. 무결성 검사   14. 금고 정보", "item"),
-        ("", "space"),
-        ("0. 금고 잠금 및 종료", "item"),
-        (f"※ {IDLE_TIMEOUT_SECONDS // 60}분간 미사용 시 자동 잠금", "note"),
-    ]
+def format_duration(seconds):
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def show_main_menu(remaining_seconds=IDLE_TIMEOUT_SECONDS, document_count=0):
+    # 장식용 테두리와 과도한 중앙 정렬을 없애고, 기능별로 왼쪽 정렬한다.
     print()
-    print("+" + "-" * (width - 2) + "+")
-    for value, kind in lines:
-        if kind == "space":
-            print("|" + " " * (width - 2) + "|")
-        else:
-            print("| " + center_display(value, inner) + " |")
-    print("+" + "-" * (width - 2) + "+")
+    print("=" * 58)
+    print("DigitalVault")
+    print("=" * 58)
+    print(f"현재 금고: {document_count}개 문서")
+    print(f"자동 잠금까지 남은 시간: {format_duration(remaining_seconds)}")
+    print("-" * 58)
+    print("문서 관리")
+    print("  1  문서 추가          2  문서 목록")
+    print("  3  문서 열기          4  문서 내보내기")
+    print("  5  문서 삭제          6  문서 이름 변경")
+    print()
+    print("보안 관리")
+    print("  7  비밀번호 변경      8  마스터 키 재발급")
+    print("  9  복구 키 발급      10  보안 기록 확인")
+    print()
+    print("금고 관리")
+    print(" 11  금고 백업         12  백업 불러오기")
+    print(" 13  무결성 검사       14  금고 정보")
+    print("-" * 58)
+    print("  0  금고 잠금 및 종료")
+    print("=" * 58)
 
 
 def atomic_write(path: Path, data: bytes):
@@ -248,7 +277,10 @@ def default_vault_directory():
 def masked_password(prompt, timeout=None):
     """실제 문자를 숨기고 별표로 표시합니다. timeout 초과 시 None을 반환합니다."""
     print(prompt, end="", flush=True)
-    deadline = None if timeout is None else time.monotonic() + timeout
+    global SESSION_DEADLINE
+    deadline = SESSION_DEADLINE if SESSION_DEADLINE is not None else (
+        None if timeout is None else time.monotonic() + timeout
+    )
 
     if os.name == "nt":
         import msvcrt
@@ -262,6 +294,11 @@ def masked_password(prompt, timeout=None):
                 time.sleep(0.05)
                 continue
             char = msvcrt.getwch()
+            if SESSION_DEADLINE is not None:
+                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
+                deadline = SESSION_DEADLINE
+            elif timeout is not None:
+                deadline = time.monotonic() + timeout
             code = ord(char)
             if code in (10, 13):
                 print()
@@ -308,6 +345,11 @@ def masked_password(prompt, timeout=None):
                 if not ready:
                     continue
                 raw = os.read(fd, 1)
+                if SESSION_DEADLINE is not None:
+                    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
+                    deadline = SESSION_DEADLINE
+                elif timeout is not None:
+                    deadline = time.monotonic() + timeout
                 if raw in (bytes([13]), bytes([10])):
                     print()
                     return "".join(chars)
@@ -632,7 +674,7 @@ class Vault:
         size_width = 16
         table_width = 4 + 2 + name_width + 2 + extension_width + 2 + size_width
 
-        print("\n" + center_display("===== 저장된 문서 목록 =====", table_width))
+        print("\n===== 저장된 문서 목록 =====\n")
         print(
             f"{pad_display('번호', 4, 'right')}  "
             f"{pad_display('파일명', name_width)}  "
@@ -660,7 +702,7 @@ class Vault:
             )
 
         print("-" * table_width)
-        print(center_display(f"총 문서: {len(items)}개", table_width))
+        print(f"\n총 문서: {len(items)}개")
 
     def choose_id(self):
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
@@ -971,6 +1013,135 @@ class Vault:
         self.log_event("backup_created")
         return len(files)
 
+    def merge_backup(self, archive_path, backup_password):
+        """백업을 검증·복호화한 뒤 현재 열려 있는 금고에 문서만 병합합니다."""
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 백업을 병합할 수 있습니다.")
+
+        archive_path = Path(archive_path)
+        staged_dir = Path(tempfile.mkdtemp(prefix=".vault-merge-", dir=self.folder))
+        staged_ids = []
+        previous_index = self.index.copy()
+        added = 0
+
+        try:
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                names = archive.namelist()
+                if len(names) != len(set(names)):
+                    raise ValueError("백업에 중복 경로가 있습니다.")
+                if any(name.startswith(("/", "\\")) or ".." in Path(name).parts
+                       or "\\" in name for name in names):
+                    raise ValueError("안전하지 않은 백업 경로입니다.")
+                if "backup_manifest.json" not in names:
+                    raise ValueError("백업 무결성 정보가 없습니다.")
+
+                manifest = json.loads(archive.read("backup_manifest.json"))
+                expected = manifest.get("files")
+                if manifest.get("format") != 1 or not isinstance(expected, dict):
+                    raise ValueError("지원하지 않는 백업 형식입니다.")
+                if not {"vault.json", "index.bin"}.issubset(expected):
+                    raise ValueError("필수 금고 파일이 없습니다.")
+                if set(expected) - set(names):
+                    raise ValueError("백업 파일 일부가 누락되었습니다.")
+
+                payloads = {}
+                for name, digest in expected.items():
+                    if name not in {"vault.json", "index.bin", "security.log"} and (
+                        not name.startswith("documents/") or
+                        not name.endswith(".bin") or
+                        len(Path(name).parts) != 2
+                    ):
+                        raise ValueError("허용되지 않은 백업 파일 경로입니다.")
+                    data = archive.read(name)
+                    actual = hashlib.sha256(data).hexdigest()
+                    if not secrets.compare_digest(actual, str(digest)):
+                        raise ValueError("백업 파일 해시가 일치하지 않습니다: " + name)
+                    payloads[name] = data
+
+            source_meta = json.loads(payloads["vault.json"].decode("utf-8"))
+            if source_meta.get("format_version") != FORMAT_VERSION:
+                raise ValueError("지원하지 않는 백업 금고 버전입니다.")
+            source_salt = base64.b64decode(source_meta["salt"], validate=True)
+            source_wrapped = base64.b64decode(source_meta["wrapped_key"], validate=True)
+            source_key = decrypt(
+                derive_key(backup_password, source_salt, source_meta.get("kdf")),
+                source_wrapped, WRAP_AAD
+            )
+            if len(source_key) != 32:
+                raise ValueError("백업 금고 키가 올바르지 않습니다.")
+
+            source_index = json.loads(
+                decrypt(source_key, payloads["index.bin"], INDEX_AAD).decode("utf-8")
+            )
+            if not isinstance(source_index, dict):
+                raise ValueError("백업 문서 목록 형식이 올바르지 않습니다.")
+
+            existing_names = {info.get("name", "").casefold()
+                              for info in self.index.values()}
+            staged_index = {}
+            for old_id, info in source_index.items():
+                if not isinstance(info, dict):
+                    raise ValueError("백업 문서 정보가 손상되었습니다.")
+                old_name = info.get("name")
+                extension = info.get("extension")
+                if (not isinstance(old_name, str) or not old_name or
+                    Path(old_name).name != old_name or
+                    not isinstance(extension, str) or
+                    extension.lower() not in EXTENSIONS or
+                    Path(old_name).suffix.lower() != extension.lower()):
+                    raise ValueError("백업에 유효하지 않은 문서 정보가 있습니다.")
+
+                source_path = f"documents/{old_id}.bin"
+                if source_path not in payloads:
+                    raise ValueError(f"백업 문서 파일이 없습니다: {old_name}")
+                aad = ("DigitalVault:document:v2:" + old_id).encode()
+                plaintext = decrypt(source_key, payloads[source_path], aad)
+
+                new_name = old_name
+                if new_name.casefold() in existing_names:
+                    stem, suffix = Path(old_name).stem, Path(old_name).suffix
+                    number = 1
+                    while f"{stem} (복원 {number}){suffix}".casefold() in existing_names:
+                        number += 1
+                    new_name = f"{stem} (복원 {number}){suffix}"
+                existing_names.add(new_name.casefold())
+
+                new_id = secrets.token_hex(12)
+                while new_id in self.index or new_id in staged_index:
+                    new_id = secrets.token_hex(12)
+                new_aad = ("DigitalVault:document:v2:" + new_id).encode()
+                staged_data = encrypt(self.key, plaintext, new_aad)
+                (staged_dir / (new_id + ".bin")).write_bytes(staged_data)
+                staged_index[new_id] = {
+                    "name": new_name,
+                    "extension": extension.lower(),
+                }
+
+            # 모든 백업 문서 검증이 끝난 후 파일을 배치하고 인덱스를 한 번만 갱신한다.
+            for new_id in staged_index:
+                target = self.docs / (new_id + ".bin")
+                if target.exists():
+                    raise FileExistsError("문서 ID 충돌이 발생했습니다.")
+                os.replace(staged_dir / (new_id + ".bin"), target)
+                staged_ids.append(new_id)
+
+            self.index = {**previous_index, **staged_index}
+            self.save_index()
+            added = len(staged_index)
+            try:
+                self.log_event("backup_merged")
+            except Exception:
+                # 감사 로그 기록 실패가 완료된 병합을 되돌리지는 않도록 한다.
+                print("주의: 병합은 완료됐지만 보안 기록을 추가하지 못했습니다.")
+            return added
+        except Exception:
+            self.index = previous_index
+            for new_id in staged_ids:
+                (self.docs / (new_id + ".bin")).unlink(missing_ok=True)
+            raise
+        finally:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+
     @staticmethod
     def restore_backup(archive_path, destination):
         archive_path, destination = Path(archive_path), Path(destination)
@@ -1083,15 +1254,19 @@ def main():
         if vault.lock_status():
             return
 
-    print("\n금고 잠금 해제 완료.")
-
+    start_session_timer()
+    # 인증 과정의 출력(비밀번호 입력 안내 포함)을 지우고 메뉴 화면만 표시한다.
+    clear_console()
     first_menu = True
     try:
         while vault.key is not None:
+            if remaining_session_seconds() <= 0:
+                vault.lock()
+                break
             if not first_menu:
                 clear_console()
             first_menu = False
-            show_main_menu()
+            show_main_menu(remaining_session_seconds(), len(vault.index))
 
             choice = timed_input("선택: ", IDLE_TIMEOUT_SECONDS)
             if choice is None:
@@ -1162,26 +1337,28 @@ def main():
                     root = Tk()
                     root.withdraw()
                     archive = filedialog.askopenfilename(
-                        title="복원할 금고 백업 파일 선택",
+                        title="현재 금고에 병합할 백업 파일 선택",
                         filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
                     )
-                    if archive:
-                        destination = filedialog.askdirectory(
-                            title="복원할 새 금고 폴더 위치 선택",
-                            mustexist=False,
-                        )
-                    else:
-                        destination = ""
                 except Exception as error:
-                    print(f"복원 위치 선택 창을 열 수 없습니다: {error}")
-                    archive, destination = "", ""
+                    print(f"백업 파일 선택 창을 열 수 없습니다: {error}")
+                    archive = ""
                 finally:
                     if root is not None:
                         root.destroy()
-                if archive and destination:
-                    print("복원 완료:", Vault.restore_backup(archive, destination))
+
+                if archive:
+                    backup_password = masked_password(
+                        "백업 당시 금고 비밀번호: ", timeout=IDLE_TIMEOUT_SECONDS
+                    )
+                    if backup_password is None:
+                        raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
+                    merged_count = vault.merge_backup(archive, backup_password)
+                    print(f"백업 병합 완료: 문서 {merged_count}개 추가")
+                    print(f"현재 금고 문서 수: {len(vault.index)}개")
+                    print("현재 USB 금고는 열린 상태로 유지됩니다.")
                 else:
-                    print("금고 복원을 취소했습니다.")
+                    print("백업 불러오기를 취소했습니다.")
             elif choice == "13":
                 vault.integrity_check()
             elif choice == "14":

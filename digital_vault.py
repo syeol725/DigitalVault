@@ -1090,7 +1090,7 @@ class Vault:
         current_time = time.time() if now is None else float(now)
         cutoff = current_time - retention_days * 24 * 60 * 60
         deleted = 0
-        pattern = re.compile(r"auto-\\d{8}-\\d{6}(?:-\\d+)?\\.zip")
+        pattern = re.compile(r"auto-\d{8}-\d{6}(?:-\d+)?\.zip")
         for candidate in backup_dir.iterdir():
             if not pattern.fullmatch(candidate.name) or candidate.is_symlink():
                 continue

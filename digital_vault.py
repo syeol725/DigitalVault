@@ -386,6 +386,7 @@ class Vault:
         self.key = master
         self.index = self.load_index()
         write_json(self.lock_file, {"tries": 0, "until": 0})
+        self.log_event("login_success")
         return True
 
     def load_index(self):
@@ -852,6 +853,9 @@ class Vault:
         if destination.exists():
             raise FileExistsError("기존 백업 파일을 덮어쓰지 않습니다.")
         files = [self.meta_file, self.index_file] + sorted(self.docs.glob("*.bin"))
+        audit_path = self.folder / "security.log"
+        if audit_path.exists():
+            files.append(audit_path)
         manifest = {}
         buffer = BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:

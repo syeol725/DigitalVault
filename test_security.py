@@ -31,6 +31,8 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             original_key = vault.key
             vault.change_password("initial-password-123", "updated-password-456")
             self.assertEqual(vault.key, original_key)
+            changed_meta = __import__("json").loads((root / "vault" / "vault.json").read_text(encoding="utf-8"))
+            self.assertIn("recovery_wrapped_key", changed_meta)
 
             reopened = Vault(root / "vault")
             self.assertTrue(reopened.login("updated-password-456"))
@@ -50,6 +52,11 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             )
             self.assertEqual(plaintext, b"DigitalVault test document")
             self.assertTrue(new_session.integrity_check())
+            self.assertTrue(new_session.recover_with_key(
+                recovery_key, "recovered-after-rotation-987"
+            ))
+            after_recovery = Vault(root / "vault")
+            self.assertTrue(after_recovery.login("recovered-after-rotation-987"))
 
     def test_kdf_rejects_untrusted_parameters(self):
         with self.assertRaises(ValueError):

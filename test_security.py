@@ -305,7 +305,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 vault.export_security_log(root / "locked.csv")
 
-    def test_automatic_backup_is_separate_and_expires_after_seven_days(self):
+    def test_automatic_backup_is_separate_and_keeps_five_newest(self):
         import os
         import time
         with tempfile.TemporaryDirectory() as directory:
@@ -318,20 +318,24 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(result["path"].is_file())
             self.assertFalse((vault.folder / "DigitalVault_Backups").exists())
 
-            old_backup = backup_dir / "auto-20200101-000000.zip"
-            old_backup.write_bytes(b"old")
-            os.utime(old_backup, (time.time() - 8 * 86400,) * 2)
-            recent_backup = backup_dir / "auto-20200102-000000.zip"
-            recent_backup.write_bytes(b"recent")
-            os.utime(recent_backup, (time.time() - 6 * 86400,) * 2)
+            now = time.time()
+            auto_backups = []
+            for index in range(7):
+                backup = backup_dir / f"auto-2020010{index + 1}-000000.zip"
+                backup.write_bytes(f"backup-{index}".encode("ascii"))
+                os.utime(backup, (now - (index + 1) * 86400,) * 2)
+                auto_backups.append(backup)
+
             unrelated = backup_dir / "manual-export.zip"
             unrelated.write_bytes(b"keep")
-            os.utime(unrelated, (time.time() - 30 * 86400,) * 2)
+            os.utime(unrelated, (now - 30 * 86400,) * 2)
 
-            deleted = vault.cleanup_automatic_backups(retention_days=7)
-            self.assertEqual(deleted, 1)
-            self.assertFalse(old_backup.exists())
-            self.assertTrue(recent_backup.exists())
+            deleted = vault.cleanup_automatic_backups()
+            remaining = list(backup_dir.glob("auto-*.zip"))
+            self.assertEqual(deleted, 3)
+            self.assertEqual(len(remaining), 5)
+            self.assertTrue(all(path.exists() for path in auto_backups[:4]))
+            self.assertFalse(any(path.exists() for path in auto_backups[4:]))
             self.assertTrue(unrelated.exists())
             self.assertTrue(vault.integrity_check())
 

@@ -56,7 +56,7 @@ class DigitalVaultApp:
     def _auto_lock(self):
         self._idle_lock_after_id = None
         if self.vault is not None and self.vault.key is not None:
-            self._lock(show_notice=True)
+            self._lock()
 
     def _cancel_idle_lock(self):
         if self._idle_lock_after_id is not None:
@@ -754,7 +754,6 @@ class DigitalVaultApp:
             ("마스터 키 재발급", self._rotate_key),
             ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
-            ("보안 기록 무결성 검사", self._verify_security_log),
             ("보안 기록 CSV 내보내기", self._export_security_log),
         ])
 
@@ -964,6 +963,14 @@ class DigitalVaultApp:
             source_by_iid[iid] = doc
 
         def apply_merge():
+            if preview["new_count"] == 0:
+                window.destroy()
+                self._show_message(
+                    "info", "복원할 문서 없음",
+                    "복원할 신규 문서가 없습니다.\n현재 금고의 기존 문서는 그대로 유지됩니다.",
+                    parent=self.root
+                )
+                return
             if not self._ask_yes_no(
                 "복원 확인",
                 f"현재 금고의 기존 문서는 유지하고 신규 문서만 추가합니다.\n"
@@ -1071,13 +1078,12 @@ class DigitalVaultApp:
         widget.insert("1.0", text or "표시할 내용이 없습니다.")
         widget.configure(state="disabled")
 
-    def _lock(self, show_notice=False):
+    def _lock(self):
         self._cancel_idle_lock()
-        backup_result = None
         backup_error = None
         if self.vault and self.vault.key is not None:
             try:
-                backup_result = self.vault.create_automatic_backup()
+                self.vault.create_automatic_backup()
             except Exception as error:
                 backup_error = str(error)
             self.vault.lock()
@@ -1090,19 +1096,6 @@ class DigitalVaultApp:
                 "금고는 잠겼지만 자동 백업을 만들지 못했습니다.\n"
                 f"오류: {backup_error}",
                 parent=self.root
-            )
-        elif backup_result:
-            message = (
-                f"자동 백업을 저장했습니다.\n{backup_result['path']}\n"
-                "보관 기간: 7일"
-            )
-            if show_notice:
-                message = (
-                    "5분 동안 사용하지 않아 금고를 자동으로 잠갔습니다.\n"
-                    + message
-                )
-            self._show_message(
-                "info", "금고 잠금 완료", message, parent=self.root
             )
 
     def _close(self):

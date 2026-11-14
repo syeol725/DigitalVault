@@ -1,3 +1,5 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +54,11 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             )
             self.assertEqual(plaintext, b"DigitalVault test document")
             self.assertTrue(new_session.integrity_check())
+            audit_output = io.StringIO()
+            with contextlib.redirect_stdout(audit_output):
+                new_session.show_security_log()
+            self.assertIn("document_added", audit_output.getvalue())
+            self.assertIn("master_key_rotated", audit_output.getvalue())
             self.assertTrue(new_session.recover_with_key(
                 recovery_key, "recovered-after-rotation-987"
             ))

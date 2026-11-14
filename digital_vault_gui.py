@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import sys
 import shutil
 import tempfile
 import tkinter as tk

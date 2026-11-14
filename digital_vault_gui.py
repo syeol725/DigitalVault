@@ -754,6 +754,7 @@ class DigitalVaultApp:
             ("마스터 키 재발급", self._rotate_key),
             ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
+            ("보안 기록 무결성 검사", self._verify_security_log),
             ("보안 기록 CSV 내보내기", self._export_security_log),
         ])
 
@@ -821,6 +822,20 @@ class DigitalVaultApp:
         with contextlib.redirect_stdout(output):
             self.vault.show_security_log()
         self._text_window("보안 기록", output.getvalue())
+
+    def _verify_security_log(self):
+        try:
+            result, output = self._capture(self.vault.verify_security_log)
+            title = "보안 기록 검사 결과"
+            if result:
+                message = output or "보안 기록 검사가 완료되었습니다."
+                kind = "info"
+            else:
+                message = output or "보안 기록에서 이상이 발견되었습니다."
+                kind = "warning"
+            self._show_message(kind, title, message, parent=self.root)
+        except Exception as error:
+            self._show_message("error", "보안 기록 검사 실패", str(error), parent=self.root)
 
     def _export_security_log(self):
         destination = filedialog.asksaveasfilename(

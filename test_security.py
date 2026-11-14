@@ -278,6 +278,32 @@ class DigitalVaultSecurityTests(unittest.TestCase):
                 self.assertIn("backup_manifest.json", archive.namelist())
                 self.assertIn("vault.json", archive.namelist())
 
+    def test_security_log_csv_export_includes_records_and_marks_unreadable_lines(self):
+        import csv
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vault = Vault(root / "vault")
+            vault.create("csv-export-password-123")
+            vault.log_event("login_success")
+            with (vault.folder / "security.log").open("a", encoding="ascii") as stream:
+                stream.write("not-valid-base64!\\n")
+
+            destination = root / "security-log.csv"
+            count = vault.export_security_log(destination)
+            self.assertEqual(count, 2)
+            content = destination.read_text(encoding="utf-8-sig")
+            rows = list(csv.reader(content.splitlines()))
+            self.assertEqual(rows[0], ["번호", "발생 시각(UTC)", "이벤트", "상태"])
+            self.assertEqual(rows[1][2:], ["login_success", "정상"])
+            self.assertEqual(rows[2], ["2", "", "", "읽을 수 없는 기록"])
+
+            with self.assertRaises(ValueError):
+                vault.export_security_log(vault.folder / "security.log")
+
+            vault.lock()
+            with self.assertRaises(RuntimeError):
+                vault.export_security_log(root / "locked.csv")
+
     def test_backup_restore_preserves_encrypted_vault(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

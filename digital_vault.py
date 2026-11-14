@@ -95,12 +95,26 @@ def decrypt(key, data, aad=None):
 
 
 def timed_input(prompt, timeout):
-    """메뉴 입력을 제한 시간 동안 기다립니다. 시간 초과 시 None을 반환합니다."""
-    print(prompt, end="", flush=True)
-    deadline, chars = time.monotonic() + timeout, []
+    """입력 대기 중 자동 잠금까지 남은 시간을 초 단위로 갱신합니다."""
+    chars = []
+    deadline = time.monotonic() + timeout
+    last_rendered = 0
+
+    def render():
+        nonlocal last_rendered
+        remaining = max(0, int(deadline - time.monotonic() + 0.999))
+        line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
+        sys.stdout.write("\\r" + line + " " * max(0, last_rendered - len(line)))
+        sys.stdout.flush()
+        last_rendered = len(line)
+
     if os.name == "nt":
         import msvcrt
-        while time.monotonic() < deadline:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            render()
             if msvcrt.kbhit():
                 ch = msvcrt.getwch()
                 code = ord(ch)
@@ -109,27 +123,33 @@ def timed_input(prompt, timeout):
                     return "".join(chars)
                 if code == 3:
                     raise KeyboardInterrupt
+                if code in (0, 224):
+                    msvcrt.getwch()
+                    continue
                 if code == 8:
                     if chars:
                         chars.pop()
-                        print(chr(8) + " " + chr(8), end="", flush=True)
                 elif ch.isprintable():
                     chars.append(ch)
-                    print(ch, end="", flush=True)
+                deadline = time.monotonic() + timeout
             else:
-                time.sleep(0.05)
+                time.sleep(0.1)
     else:
         import select
         import termios
         import tty
         if not sys.stdin.isatty():
-            return input()
+            return input(prompt)
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
-            while time.monotonic() < deadline:
-                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                render()
+                ready, _, _ = select.select([sys.stdin], [], [], min(0.2, remaining))
                 if not ready:
                     continue
                 ch = os.read(fd, 1).decode("utf-8", errors="ignore")
@@ -142,16 +162,16 @@ def timed_input(prompt, timeout):
                 if code in (8, 127):
                     if chars:
                         chars.pop()
-                        print(chr(8) + " " + chr(8), end="", flush=True)
                 elif code == 3:
                     raise KeyboardInterrupt
                 elif ch.isprintable():
                     chars.append(ch)
-                    print(ch, end="", flush=True)
+                deadline = time.monotonic() + timeout
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
     print()
-    print("입력 대기 시간이 초과되어 금고를 잠급니다.")
+    print("미사용 시간이 초과되어 금고를 잠급니다.")
     return None
 
 

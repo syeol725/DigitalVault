@@ -364,35 +364,73 @@ class Vault:
             except OSError:
                 pass
 
-    def rotate_master_key(self):
+    def rotate_master_key(self, password):
+        """새 마스터 키로 재암호화하고 메타데이터까지 함께 교체합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 실행할 수 있습니다.")
+
+        meta = json.loads(self.meta_file.read_text(encoding="utf-8"))
+        salt = base64.b64decode(meta["salt"], validate=True)
+        wrapped = base64.b64decode(meta["wrapped_key"], validate=True)
+        verified_master = decrypt(
+            derive_key(password, salt, meta.get("kdf")), wrapped, WRAP_AAD
+        )
+        if not secrets.compare_digest(verified_master, self.key):
+            raise ValueError("현재 비밀번호가 올바르지 않습니다.")
+
         new_key = secrets.token_bytes(32)
+        new_salt = secrets.token_bytes(16)
+        new_wrapped = encrypt(derive_key(password, new_salt), new_key, WRAP_AAD)
+        new_meta = {
+            "format_version": FORMAT_VERSION,
+            "kdf": KDF_PARAMS,
+            "salt": base64.b64encode(new_salt).decode("ascii"),
+            "wrapped_key": base64.b64encode(new_wrapped).decode("ascii"),
+        }
+
         stage = self.folder / (".rotation-" + secrets.token_hex(8))
-        staged_docs, backup_docs = stage / "documents", self.folder / (".documents-backup-" + secrets.token_hex(8))
+        staged_docs = stage / "documents"
+        backup_docs = self.folder / (".documents-backup-" + secrets.token_hex(8))
         staged_docs.mkdir(parents=True)
-        old_index = stage / "index.old"
+        old_index, old_meta = stage / "index.old", stage / "vault.old"
+        staged_index, staged_meta = stage / "index.new", stage / "vault.new"
         try:
             for file_id in self.index:
                 aad = ("DigitalVault:document:v2:" + file_id).encode()
-                plain = decrypt(self.key, (self.docs / (file_id + ".bin")).read_bytes(), aad)
-                atomic_write(staged_docs / (file_id + ".bin"), encrypt(new_key, plain, aad))
-            payload = json.dumps(self.index, ensure_ascii=False).encode("utf-8")
-            staged_index = stage / "index.new"
-            atomic_write(staged_index, encrypt(new_key, payload, INDEX_AAD))
-            if self.index_file.exists(): shutil.copy2(self.index_file, old_index)
+                plain = decrypt(
+                    self.key, (self.docs / (file_id + ".bin")).read_bytes(), aad
+                )
+                atomic_write(
+                    staged_docs / (file_id + ".bin"),
+                    encrypt(new_key, plain, aad),
+                )
+
+            index_data = json.dumps(self.index, ensure_ascii=False).encode("utf-8")
+            atomic_write(staged_index, encrypt(new_key, index_data, INDEX_AAD))
+            write_json(staged_meta, new_meta)
+            if self.index_file.exists():
+                shutil.copy2(self.index_file, old_index)
+            shutil.copy2(self.meta_file, old_meta)
+
             self.docs.rename(backup_docs)
             try:
                 staged_docs.rename(self.docs)
                 os.replace(staged_index, self.index_file)
+                os.replace(staged_meta, self.meta_file)
             except Exception:
-                if self.docs.exists(): shutil.rmtree(self.docs, ignore_errors=True)
-                backup_docs.rename(self.docs)
-                if old_index.exists(): os.replace(old_index, self.index_file)
+                if self.docs.exists():
+                    shutil.rmtree(self.docs, ignore_errors=True)
+                if backup_docs.exists():
+                    backup_docs.rename(self.docs)
+                if old_index.exists():
+                    os.replace(old_index, self.index_file)
+                if old_meta.exists():
+                    os.replace(old_meta, self.meta_file)
                 raise
+
             shutil.rmtree(backup_docs, ignore_errors=True)
             self.key = new_key
-            print("마스터 키를 재발급하고 모든 문서를 재암호화했습니다.")
+            print("마스터 키를 재발급하고 문서·인덱스·키 메타데이터를 갱신했습니다.")
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 

@@ -250,8 +250,11 @@ class DigitalVaultApp:
     def _authenticate(self):
         folder_text = self.folder_var.get().strip()
         password = self.password_var.get()
-        if not folder_text or not password:
-            self._show_message("warning", "입력 확인", "금고 위치와 비밀번호를 입력하세요.", parent=self.root)
+        if not folder_text:
+            self._show_message("warning", "입력 확인", "금고 저장 위치를 입력하세요.", parent=self.root)
+            return
+        if password == "":
+            self._show_message("warning", "입력 확인", "비밀번호를 입력하세요.", parent=self.root)
             return
         try:
             vault = Vault(Path(folder_text).expanduser())
@@ -402,8 +405,14 @@ class DigitalVaultApp:
 
         stats = tk.Frame(content, bg=c["canvas"])
         stats.pack(fill="x", pady=(0, 22))
-        self.count_label = self._stat_card(stats, "저장된 문서", "0개")
-        self.size_label = self._stat_card(stats, "암호화 용량", "0 B")
+        stats.grid_columnconfigure(0, weight=1, uniform="stat_cards")
+        stats.grid_columnconfigure(1, weight=1, uniform="stat_cards")
+        self.count_label = self._stat_card(
+            stats, "저장된 문서", "0개", column=0, padx=(0, 7)
+        )
+        self.size_label = self._stat_card(
+            stats, "암호화 용량", "0 B", column=1, padx=(7, 0)
+        )
 
         toolbar = tk.Frame(content, bg=c["canvas"])
         toolbar.pack(fill="x", pady=(0, 12))
@@ -602,13 +611,22 @@ class DigitalVaultApp:
         actions.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
 
+        value = tk.StringVar(value=initial or "")
+        validation = tk.Label(
+            card, text="", bg="#FFFFFF", fg="#C43D4B",
+            font=("Malgun Gothic", 8)
+        )
+
         def submit():
+            if show and value.get() == "":
+                validation.configure(text="입력되지 않았습니다. 내용을 입력하세요.")
+                entry.focus_set()
+                return
             result["value"] = value.get()
             window.destroy()
 
         ttk.Button(actions, text="확인", style="Accent.TButton", command=submit).pack(side="right")
 
-        value = tk.StringVar(value=initial or "")
         input_entry_box = tk.Frame(
             card, bg="#FFFFFF", highlightthickness=1,
             highlightbackground="#D8DEE8", highlightcolor="#315ECA"
@@ -625,6 +643,7 @@ class DigitalVaultApp:
             card, prompt_text, max_lines=available_lines, width_chars=64
         )
         body.pack(side="top", fill="both", expand=True, pady=(16, 0))
+        validation.pack(side="top", anchor="w", pady=(6, 0))
 
         window.bind("<Return>", lambda _e: submit())
         window.bind("<Escape>", lambda _e: window.destroy())
@@ -681,13 +700,13 @@ class DigitalVaultApp:
         window.grab_set()
 
 
-    def _stat_card(self, parent, title, value):
+    def _stat_card(self, parent, title, value, column=0, padx=(0, 0)):
         c = self.colors
         card = tk.Frame(
             parent, bg=c["surface"], padx=20, pady=16,
             highlightthickness=1, highlightbackground=c["line"]
         )
-        card.pack(side="left", fill="x", expand=True, padx=(0, 14))
+        card.grid(row=0, column=column, sticky="ew", padx=padx)
         tk.Label(
             card, text=title, bg=c["surface"], fg=c["muted"],
             font=("Malgun Gothic", 9)

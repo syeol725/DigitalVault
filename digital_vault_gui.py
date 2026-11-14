@@ -187,12 +187,17 @@ class DigitalVaultApp:
         ).pack(anchor="w")
         folder_row = tk.Frame(card, bg=c["surface"])
         folder_row.pack(fill="x", pady=(8, 20))
+        folder_entry_box = tk.Frame(
+            folder_row, bg=c["surface"], highlightthickness=1,
+            highlightbackground=c["line"], highlightcolor=c["accent"]
+        )
+        folder_entry_box.pack(side="left", fill="x", expand=True)
         folder_entry = tk.Entry(
-            folder_row, textvariable=self.folder_var, relief="solid", bd=1,
+            folder_entry_box, textvariable=self.folder_var, relief="flat", bd=0,
             highlightthickness=0, bg=c["surface"], fg=c["text"],
             insertbackground=c["text"], font=("Malgun Gothic", 9)
         )
-        folder_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(14, 14))
+        folder_entry.pack(fill="both", expand=True, padx=10, ipady=8)
         ttk.Button(
             folder_row, text="찾기", command=self._choose_folder
         ).pack(side="left", padx=(9, 0))
@@ -202,13 +207,18 @@ class DigitalVaultApp:
             font=("Malgun Gothic", 9, "bold")
         ).pack(anchor="w")
         self.password_var = tk.StringVar()
+        password_entry_box = tk.Frame(
+            card, bg=c["surface"], highlightthickness=1,
+            highlightbackground=c["line"], highlightcolor=c["accent"]
+        )
+        password_entry_box.pack(fill="x", pady=(8, 18))
         entry = tk.Entry(
-            card, textvariable=self.password_var, show="●",
-            relief="solid", bd=1, highlightthickness=0,
+            password_entry_box, textvariable=self.password_var, show="●",
+            relief="flat", bd=0, highlightthickness=0,
             bg=c["surface"], fg=c["text"], insertbackground=c["text"],
             font=("Malgun Gothic", 11)
         )
-        entry.pack(fill="x", pady=(8, 18), ipady=9, padx=(14, 14))
+        entry.pack(fill="both", expand=True, padx=10, ipady=9)
         entry.bind("<Return>", lambda _e: self._authenticate())
 
         ttk.Button(
@@ -599,9 +609,16 @@ class DigitalVaultApp:
         ttk.Button(actions, text="확인", style="Accent.TButton", command=submit).pack(side="right")
 
         value = tk.StringVar(value=initial or "")
-        entry = tk.Entry(card, textvariable=value, show=show or "",
-                         relief="solid", bd=1, font=("Malgun Gothic", 10))
-        entry.pack(side="bottom", fill="x", ipady=9, pady=(10, 0), padx=(14, 14))
+        input_entry_box = tk.Frame(
+            card, bg="#FFFFFF", highlightthickness=1,
+            highlightbackground="#D8DEE8", highlightcolor="#315ECA"
+        )
+        input_entry_box.pack(side="bottom", fill="x", pady=(10, 0))
+        entry = tk.Entry(input_entry_box, textvariable=value, show=show or "",
+                         relief="flat", bd=0, highlightthickness=0,
+                         bg="#FFFFFF", fg="#202938", insertbackground="#202938",
+                         font=("Malgun Gothic", 10))
+        entry.pack(fill="both", expand=True, padx=10, ipady=9)
 
         available_lines = max(2, min(8, (height - 222) // line_height))
         body, _lines, _lh = self._dialog_text(

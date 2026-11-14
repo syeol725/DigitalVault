@@ -192,7 +192,7 @@ class DigitalVaultApp:
             highlightthickness=0, bg=c["surface"], fg=c["text"],
             insertbackground=c["text"], font=("Malgun Gothic", 9)
         )
-        folder_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(5, 5))
+        folder_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(14, 14))
         ttk.Button(
             folder_row, text="찾기", command=self._choose_folder
         ).pack(side="left", padx=(9, 0))
@@ -208,7 +208,7 @@ class DigitalVaultApp:
             bg=c["surface"], fg=c["text"], insertbackground=c["text"],
             font=("Malgun Gothic", 11)
         )
-        entry.pack(fill="x", pady=(8, 18), ipady=9, padx=(5, 5))
+        entry.pack(fill="x", pady=(8, 18), ipady=9, padx=(14, 14))
         entry.bind("<Return>", lambda _e: self._authenticate())
 
         ttk.Button(
@@ -601,7 +601,7 @@ class DigitalVaultApp:
         value = tk.StringVar(value=initial or "")
         entry = tk.Entry(card, textvariable=value, show=show or "",
                          relief="solid", bd=1, font=("Malgun Gothic", 10))
-        entry.pack(side="bottom", fill="x", ipady=9, pady=(10, 0), padx=(5, 5))
+        entry.pack(side="bottom", fill="x", ipady=9, pady=(10, 0), padx=(14, 14))
 
         available_lines = max(2, min(8, (height - 222) // line_height))
         body, _lines, _lh = self._dialog_text(

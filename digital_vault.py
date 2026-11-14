@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import zipfile
+import unicodedata
 from io import BytesIO
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,6 +160,65 @@ def read_input(prompt):
     if value is None:
         raise TimeoutError("미사용 시간이 초과되어 금고를 잠급니다.")
     return value
+
+
+def clear_console():
+    """이전 작업 출력을 지우고 다음 메뉴를 표시합니다."""
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def display_width(value):
+    return sum(
+        2 if unicodedata.east_asian_width(char) in ("F", "W", "A") else 1
+        for char in str(value)
+    )
+
+
+def center_display(value, width):
+    value = str(value)
+    padding = max(0, width - display_width(value))
+    left = padding // 2
+    return " " * left + value + " " * (padding - left)
+
+
+def pad_display(value, width, align="left"):
+    value = str(value)
+    padding = max(0, width - display_width(value))
+    if align == "right":
+        return " " * padding + value
+    return value + " " * padding
+
+
+def show_main_menu():
+    width = 72
+    inner = width - 4
+    lines = [
+        ("DigitalVault", "title"),
+        ("", "space"),
+        ("[ 문서 관리 ]", "section"),
+        ("1. 문서 추가       2. 문서 목록", "item"),
+        ("3. 문서 열기       4. 문서 내보내기", "item"),
+        ("5. 문서 삭제       6. 문서 이름 변경", "item"),
+        ("", "space"),
+        ("[ 보안 관리 ]", "section"),
+        ("7. 비밀번호 변경   8. 마스터 키 재발급", "item"),
+        ("9. 복구 키 발급   10. 보안 기록 확인", "item"),
+        ("", "space"),
+        ("[ 금고 관리 ]", "section"),
+        ("11. 금고 백업     12. 금고 복원", "item"),
+        ("13. 무결성 검사   14. 금고 정보", "item"),
+        ("", "space"),
+        ("0. 금고 잠금 및 종료", "item"),
+        (f"※ {IDLE_TIMEOUT_SECONDS // 60}분간 미사용 시 자동 잠금", "note"),
+    ]
+    print()
+    print("+" + "-" * (width - 2) + "+")
+    for value, kind in lines:
+        if kind == "space":
+            print("|" + " " * (width - 2) + "|")
+        else:
+            print("| " + center_display(value, inner) + " |")
+    print("+" + "-" * (width - 2) + "+")
 
 
 def atomic_write(path: Path, data: bytes):
@@ -567,18 +627,40 @@ class Vault:
             print("저장된 문서가 없습니다.")
             return
 
-        print("\n===== 저장된 문서 목록 =====")
-        print("{:<5}{:<30}{:<8}{:>12}".format("번호", "파일명", "형식", "암호화 크기"))
-        print("-" * 58)
+        name_width = 36
+        extension_width = 8
+        size_width = 16
+        table_width = 4 + 2 + name_width + 2 + extension_width + 2 + size_width
+
+        print("\n" + center_display("===== 저장된 문서 목록 =====", table_width))
+        print(
+            f"{pad_display('번호', 4, 'right')}  "
+            f"{pad_display('파일명', name_width)}  "
+            f"{pad_display('형식', extension_width)}  "
+            f"{pad_display('암호화 크기', size_width, 'right')}"
+        )
+        print("-" * table_width)
+
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
         for number, (file_id, info) in enumerate(items, 1):
             path = self.docs / (file_id + ".bin")
             size = path.stat().st_size if path.exists() else 0
-            print("{:<5}{:<30}{:<8}{:>10,} B".format(
-                number, info["name"][:28], info["extension"], size
-            ))
-        print("-" * 58)
-        print("총 문서: {}개".format(len(items)))
+            name = info["name"]
+            if display_width(name) > name_width:
+                shortened = name
+                while shortened and display_width(shortened + "...") > name_width:
+                    shortened = shortened[:-1]
+                name = shortened + "..."
+            size_text = f"{size:,} B"
+            print(
+                f"{pad_display(number, 4, 'right')}  "
+                f"{pad_display(name, name_width)}  "
+                f"{pad_display(info['extension'], extension_width)}  "
+                f"{pad_display(size_text, size_width, 'right')}"
+            )
+
+        print("-" * table_width)
+        print(center_display(f"총 문서: {len(items)}개", table_width))
 
     def choose_id(self):
         items = sorted(self.index.items(), key=lambda item: item[1]["name"].casefold())
@@ -920,16 +1002,6 @@ class Vault:
             raise
         return destination
 
-    def search_documents(self):
-        query = read_input("검색할 파일명: ").strip().casefold()
-        found = sorted((info["name"] for info in self.index.values()
-                        if query in info["name"].casefold()), key=str.casefold)
-        if not found:
-            print("검색 결과가 없습니다.")
-        else:
-            for number, name in enumerate(found, 1):
-                print(f"{number}. {name}")
-
     def rename_document(self):
         file_id = self.choose_id()
         if not file_id:
@@ -1013,28 +1085,13 @@ def main():
 
     print("\n금고 잠금 해제 완료.")
 
+    first_menu = True
     try:
         while vault.key is not None:
-            print("\n" + "=" * 54)
-            print("                 DigitalVault")
-            print("=" * 54)
-            print(" [ 문서 관리 ]")
-            print("  1. 문서 추가          2. 문서 목록")
-            print("  3. 문서 열기          4. 문서 내보내기")
-            print("  5. 문서 삭제          6. 문서 검색")
-            print("  7. 문서 이름 변경")
-            print("-" * 54)
-            print(" [ 보안 관리 ]")
-            print("  8. 비밀번호 변경      9. 마스터 키 재발급")
-            print(" 10. 복구 키 발급       11. 보안 기록 확인")
-            print("-" * 54)
-            print(" [ 금고 관리 ]")
-            print(" 12. 금고 백업          13. 금고 복원")
-            print(" 14. 무결성 검사        15. 금고 정보")
-            print("-" * 54)
-            print("  0. 금고 잠금 및 종료")
-            print(f"  ※ {IDLE_TIMEOUT_SECONDS // 60}분간 미사용 시 자동 잠금")
-            print("=" * 54)
+            if not first_menu:
+                clear_console()
+            first_menu = False
+            show_main_menu()
 
             choice = timed_input("선택: ", IDLE_TIMEOUT_SECONDS)
             if choice is None:
@@ -1055,14 +1112,12 @@ def main():
             elif choice == "5":
                 vault.delete_document()
             elif choice == "6":
-                vault.search_documents()
-            elif choice == "7":
                 vault.rename_document()
-            elif choice == "8":
+            elif choice == "7":
                 old = masked_password("현재 비밀번호: ")
                 new = prompt_new_password()
                 vault.change_password(old, new)
-            elif choice == "9":
+            elif choice == "8":
                 answer = read_input("마스터 키를 재발급할까요? (y/n): ").strip().lower()
                 if answer == "y":
                     current = masked_password("현재 비밀번호: ")
@@ -1073,26 +1128,63 @@ def main():
                     vault.rotate_master_key(current, recovery)
                 else:
                     print("마스터 키 재발급을 취소했습니다.")
-            elif choice == "10":
+            elif choice == "9":
                 current = masked_password("현재 비밀번호: ")
                 recovery = vault.setup_recovery_key(current)
                 print("\n새 복구 키 (한 번만 표시):")
                 print(recovery)
                 print("별도 장소에 안전하게 보관하세요.")
-            elif choice == "11":
+            elif choice == "10":
                 vault.show_security_log()
-            elif choice == "12":
-                destination = read_input("백업 파일 경로 (.zip): ").strip().strip('"')
+            elif choice == "11":
+                root = None
+                try:
+                    root = Tk()
+                    root.withdraw()
+                    destination = filedialog.asksaveasfilename(
+                        title="금고 백업 파일을 저장할 위치 선택",
+                        defaultextension=".zip",
+                        filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
+                    )
+                except Exception as error:
+                    print(f"백업 저장 창을 열 수 없습니다: {error}")
+                    destination = ""
+                finally:
+                    if root is not None:
+                        root.destroy()
                 if destination:
                     print(f"백업 완료: {vault.create_backup(destination)}개 파일")
-            elif choice == "13":
-                archive = read_input("백업 ZIP 경로: ").strip().strip('"')
-                destination = read_input("새 복원 폴더 경로: ").strip().strip('"')
+                else:
+                    print("금고 백업을 취소했습니다.")
+            elif choice == "12":
+                root = None
+                try:
+                    root = Tk()
+                    root.withdraw()
+                    archive = filedialog.askopenfilename(
+                        title="복원할 금고 백업 파일 선택",
+                        filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
+                    )
+                    if archive:
+                        destination = filedialog.askdirectory(
+                            title="복원할 새 금고 폴더 위치 선택",
+                            mustexist=False,
+                        )
+                    else:
+                        destination = ""
+                except Exception as error:
+                    print(f"복원 위치 선택 창을 열 수 없습니다: {error}")
+                    archive, destination = "", ""
+                finally:
+                    if root is not None:
+                        root.destroy()
                 if archive and destination:
                     print("복원 완료:", Vault.restore_backup(archive, destination))
-            elif choice == "14":
+                else:
+                    print("금고 복원을 취소했습니다.")
+            elif choice == "13":
                 vault.integrity_check()
-            elif choice == "15":
+            elif choice == "14":
                 vault.show_vault_info()
             else:
                 print("메뉴 번호를 다시 선택하세요.")
@@ -1103,6 +1195,7 @@ def main():
                     "\n작업을 계속하시겠습니까? (y/n): "
                 ).strip().lower()
                 if answer == "y":
+                    clear_console()
                     break
                 if answer == "n":
                     vault.lock()

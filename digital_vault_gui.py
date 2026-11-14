@@ -67,33 +67,87 @@ class DigitalVaultApp:
             self._idle_lock_after_id = None
 
     def _style(self):
+        """부드러운 중립색과 낮은 대비의 경계선을 사용하는 공통 UI 테마."""
         style = ttk.Style(self.root)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Treeview", rowheight=42, font=("Malgun Gothic", 10),
-                        background="#FFFFFF", fieldbackground="#FFFFFF",
-                        foreground="#202938", borderwidth=0, relief="flat")
-        style.configure("Treeview.Heading", font=("Malgun Gothic", 9, "bold"),
-                        background="#F2F5FA", foreground="#526078", relief="flat", padding=(12, 12))
-        style.map("Treeview", background=[("selected", "#E4ECFF")],
-                  foreground=[("selected", "#173B83")])
-        style.configure("TButton", font=("Malgun Gothic", 9), padding=(14, 10),
-                        background="#FFFFFF", foreground="#344054", borderwidth=0, relief="flat")
-        style.map("TButton", background=[("active", "#EDF2FA"), ("pressed", "#E4EAF4")])
-        style.configure("Accent.TButton", font=("Malgun Gothic", 9, "bold"),
-                        padding=(16, 11), background="#315ECA", foreground="#FFFFFF", borderwidth=0)
-        style.map("Accent.TButton", background=[("active", "#244DAA")])
-        style.configure("TLabel", font=("Malgun Gothic", 10), background="#FFFFFF",
-                        foreground="#202938")
-        style.configure("Muted.TLabel", foreground="#738096", background="#FFFFFF")
-        style.configure("Title.TLabel", font=("Malgun Gothic", 20, "bold"))
-        style.configure("Card.TFrame", background="#FFFFFF")
-        style.configure("Sidebar.TFrame", background="#182436")
-        style.configure("Sidebar.TButton", background="#182436", foreground="#D8E1EF",
-                        borderwidth=0, anchor="w", padding=(18, 13), font=("Malgun Gothic", 9))
-        style.map("Sidebar.TButton", background=[("active", "#2B3B52")], foreground=[("active", "#FFFFFF")])
+
+        self.colors = {
+            "canvas": "#F6F7F8",
+            "surface": "#FFFFFF",
+            "surface_alt": "#F1F3F5",
+            "text": "#202124",
+            "muted": "#73777D",
+            "line": "#E7E9EC",
+            "accent": "#16856B",
+            "accent_hover": "#116F59",
+            "accent_soft": "#E7F4EF",
+            "sidebar": "#FBFBFC",
+        }
+        style.configure(
+            "Treeview", rowheight=44, font=("Malgun Gothic", 10),
+            background=self.colors["surface"], fieldbackground=self.colors["surface"],
+            foreground=self.colors["text"], borderwidth=0, relief="flat",
+            padding=(8, 5)
+        )
+        style.configure(
+            "Treeview.Heading", font=("Malgun Gothic", 9, "bold"),
+            background=self.colors["surface_alt"], foreground=self.colors["muted"],
+            relief="flat", borderwidth=0, padding=(14, 13)
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", self.colors["accent_soft"])],
+            foreground=[("selected", self.colors["accent"])]
+        )
+        style.configure(
+            "TButton", font=("Malgun Gothic", 9), padding=(15, 10),
+            background=self.colors["surface_alt"], foreground=self.colors["text"],
+            borderwidth=0, relief="flat", focusthickness=0
+        )
+        style.map(
+            "TButton",
+            background=[("active", "#E8EBEF"), ("pressed", "#DDE2E7")],
+            foreground=[("disabled", "#A6ABB1")]
+        )
+        style.configure(
+            "Accent.TButton", font=("Malgun Gothic", 9, "bold"),
+            padding=(18, 11), background=self.colors["accent"],
+            foreground="#FFFFFF", borderwidth=0, relief="flat", focusthickness=0
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", self.colors["accent_hover"]),
+                        ("pressed", self.colors["accent_hover"])]
+        )
+        style.configure(
+            "Sidebar.TFrame", background=self.colors["sidebar"]
+        )
+        style.configure(
+            "Sidebar.TButton", background=self.colors["sidebar"],
+            foreground="#4C5157", borderwidth=0, anchor="w",
+            padding=(18, 12), font=("Malgun Gothic", 9)
+        )
+        style.map(
+            "Sidebar.TButton",
+            background=[("active", self.colors["surface_alt"])],
+            foreground=[("active", self.colors["accent"])]
+        )
+        style.configure(
+            "TLabel", font=("Malgun Gothic", 10),
+            background=self.colors["surface"], foreground=self.colors["text"]
+        )
+        style.configure(
+            "Muted.TLabel", foreground=self.colors["muted"],
+            background=self.colors["surface"]
+        )
+        style.configure(
+            "Title.TLabel", font=("Malgun Gothic", 21, "bold"),
+            background=self.colors["canvas"], foreground=self.colors["text"]
+        )
+        style.configure("Card.TFrame", background=self.colors["surface"])
 
     def _center(self, window, width=460, height=360):
         window.update_idletasks()
@@ -102,39 +156,72 @@ class DigitalVaultApp:
         window.geometry(f"{width}x{height}+{x}+{y}")
 
     def _login_screen(self):
-        self.login_frame = tk.Frame(self.root, bg="#F5F7FB")
+        bg = self.colors["canvas"]
+        self.login_frame = tk.Frame(self.root, bg=bg)
         self.login_frame.pack(fill="both", expand=True)
-        card = tk.Frame(self.login_frame, bg="#FFFFFF", padx=38, pady=34,
-                        highlightthickness=1, highlightbackground="#E2E7EF")
-        card.place(relx=.5, rely=.5, anchor="center", width=460)
-        tk.Label(card, text="DigitalVault", bg="#FFFFFF", fg="#1D2A3B",
-                 font=("Malgun Gothic", 23, "bold")).pack(anchor="w")
-        tk.Label(card, text="암호화 문서 금고", bg="#FFFFFF", fg="#7B8798",
-                 font=("Malgun Gothic", 10)).pack(anchor="w", pady=(4, 24))
 
-        default_path = default_vault_directory()
-        self.folder_var = tk.StringVar(value=str(default_path))
-        tk.Label(card, text="금고 저장 위치", bg="#FFFFFF", fg="#48566B",
-                 font=("Malgun Gothic", 9, "bold")).pack(anchor="w")
-        folder_row = tk.Frame(card, bg="#FFFFFF")
-        folder_row.pack(fill="x", pady=(7, 18))
-        tk.Entry(folder_row, textvariable=self.folder_var, relief="solid",
-                 bd=1, font=("Malgun Gothic", 9)).pack(side="left", fill="x", expand=True, ipady=8)
-        ttk.Button(folder_row, text="찾기", command=self._choose_folder).pack(side="left", padx=(8, 0))
+        card = tk.Frame(
+            self.login_frame, bg=self.colors["surface"], padx=42, pady=38,
+            highlightthickness=1, highlightbackground=self.colors["line"]
+        )
+        card.place(relx=.5, rely=.5, anchor="center", width=470)
 
+        mark = tk.Label(
+            card, text="D", bg=self.colors["accent_soft"], fg=self.colors["accent"],
+            font=("Segoe UI", 17, "bold"), width=3, height=1
+        )
+        mark.pack(anchor="w", pady=(0, 20))
+        tk.Label(
+            card, text="DigitalVault", bg=self.colors["surface"],
+            fg=self.colors["text"], font=("Malgun Gothic", 24, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            card, text="중요한 문서를 안전하게 보관하세요",
+            bg=self.colors["surface"], fg=self.colors["muted"],
+            font=("Malgun Gothic", 10)
+        ).pack(anchor="w", pady=(6, 28))
+
+        self.folder_var = tk.StringVar(value=str(default_vault_directory()))
+        tk.Label(
+            card, text="금고 위치", bg=self.colors["surface"],
+            fg="#555B62", font=("Malgun Gothic", 9, "bold")
+        ).pack(anchor="w")
+        folder_row = tk.Frame(card, bg=self.colors["surface"])
+        folder_row.pack(fill="x", pady=(8, 20))
+        folder_entry = tk.Entry(
+            folder_row, textvariable=self.folder_var, relief="flat", bd=0,
+            bg=self.colors["surface_alt"], fg=self.colors["text"],
+            insertbackground=self.colors["text"], font=("Malgun Gothic", 9)
+        )
+        folder_entry.pack(side="left", fill="x", expand=True, ipady=11, padx=(12, 6))
+        ttk.Button(folder_row, text="찾기", command=self._choose_folder).pack(side="right")
+
+        tk.Label(
+            card, text="비밀번호", bg=self.colors["surface"],
+            fg="#555B62", font=("Malgun Gothic", 9, "bold")
+        ).pack(anchor="w")
         self.password_var = tk.StringVar()
-        tk.Label(card, text="비밀번호", bg="#FFFFFF", fg="#48566B",
-                 font=("Malgun Gothic", 9, "bold")).pack(anchor="w")
-        entry = tk.Entry(card, textvariable=self.password_var, show="●", relief="solid",
-                         bd=1, font=("Malgun Gothic", 11))
-        entry.pack(fill="x", pady=(7, 16), ipady=9)
+        entry = tk.Entry(
+            card, textvariable=self.password_var, show="●", relief="flat", bd=0,
+            bg=self.colors["surface_alt"], fg=self.colors["text"],
+            insertbackground=self.colors["text"], font=("Malgun Gothic", 11)
+        )
+        entry.pack(fill="x", pady=(8, 20), ipady=12, padx=0)
         entry.bind("<Return>", lambda _e: self._authenticate())
-        ttk.Button(card, text="금고 열기", style="Accent.TButton",
-                   command=self._authenticate).pack(fill="x")
-        ttk.Button(card, text="복구 키로 비밀번호 재설정",
-                   command=self._recover_password).pack(fill="x", pady=(8, 0))
-        tk.Label(card, text="처음 사용하는 폴더라면 새 금고가 생성됩니다.",
-                 bg="#FFFFFF", fg="#8993A3", font=("Malgun Gothic", 8)).pack(anchor="w", pady=(15, 0))
+
+        ttk.Button(
+            card, text="금고 열기", style="Accent.TButton",
+            command=self._authenticate
+        ).pack(fill="x")
+        ttk.Button(
+            card, text="복구 키로 비밀번호 재설정",
+            command=self._recover_password
+        ).pack(fill="x", pady=(10, 0))
+        tk.Label(
+            card, text="처음 사용하는 폴더라면 새 금고가 생성됩니다.",
+            bg=self.colors["surface"], fg="#92979D",
+            font=("Malgun Gothic", 8)
+        ).pack(anchor="w", pady=(22, 0))
         entry.focus_set()
 
     def _choose_folder(self):
@@ -231,16 +318,37 @@ class DigitalVaultApp:
 
     def _dashboard(self):
         self._clear()
-        shell = tk.Frame(self.root, bg="#F5F7FB")
+        c = self.colors
+        shell = tk.Frame(self.root, bg=c["canvas"])
         shell.pack(fill="both", expand=True)
-        sidebar = ttk.Frame(shell, style="Sidebar.TFrame", width=220)
+
+        sidebar = ttk.Frame(shell, style="Sidebar.TFrame", width=226)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
-        tk.Label(sidebar, text="DigitalVault", bg="#202B3C", fg="#FFFFFF",
-                 font=("Malgun Gothic", 17, "bold")).pack(anchor="w", padx=20, pady=(26, 3))
-        tk.Label(sidebar, text="SECURE DOCUMENT STORAGE", bg="#202B3C", fg="#9EABC0",
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w", padx=21, pady=(0, 30))
-        for label, command in [
+
+        brand = tk.Frame(sidebar, bg=c["sidebar"])
+        brand.pack(fill="x", padx=22, pady=(26, 34))
+        tk.Label(
+            brand, text="D", bg=c["accent_soft"], fg=c["accent"],
+            font=("Segoe UI", 14, "bold"), width=3, height=1
+        ).pack(side="left", padx=(0, 10))
+        brand_text = tk.Frame(brand, bg=c["sidebar"])
+        brand_text.pack(side="left")
+        tk.Label(
+            brand_text, text="DigitalVault", bg=c["sidebar"], fg=c["text"],
+            font=("Malgun Gothic", 14, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            brand_text, text="SECURE DOCUMENTS", bg=c["sidebar"],
+            fg="#92979D", font=("Segoe UI", 7, "bold")
+        ).pack(anchor="w", pady=(2, 0))
+
+        tk.Label(
+            sidebar, text="WORKSPACE", bg=c["sidebar"], fg="#A0A4AA",
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", padx=22, pady=(0, 8))
+
+        nav_items = [
             ("▦   문서 보관함", self._refresh_documents),
             ("＋   문서 추가", self._add_document),
             ("⇩   문서 내보내기", self._export_document),
@@ -248,42 +356,76 @@ class DigitalVaultApp:
             ("▤   백업 및 복구", self._backup_menu),
             ("✓   무결성 검사", self._integrity_check),
             ("ⓘ   금고 정보", self._vault_info),
-        ]:
-            ttk.Button(sidebar, text=label, style="Sidebar.TButton",
-                       command=command).pack(fill="x", padx=8, pady=2)
-        ttk.Button(sidebar, text="잠금 및 종료", style="Sidebar.TButton",
-                   command=self._lock).pack(side="bottom", fill="x", padx=8, pady=18)
+        ]
+        for label, command in nav_items:
+            ttk.Button(
+                sidebar, text=label, style="Sidebar.TButton",
+                command=command
+            ).pack(fill="x", padx=10, pady=2)
 
-        main = tk.Frame(shell, bg="#F5F7FB")
+        bottom = tk.Frame(sidebar, bg=c["sidebar"])
+        bottom.pack(side="bottom", fill="x", padx=12, pady=16)
+        tk.Frame(bottom, bg=c["line"], height=1).pack(fill="x", pady=(0, 12))
+        ttk.Button(
+            bottom, text="잠금 및 종료", style="Sidebar.TButton",
+            command=self._lock
+        ).pack(fill="x")
+
+        main = tk.Frame(shell, bg=c["canvas"])
         main.pack(side="left", fill="both", expand=True)
-        header = tk.Frame(main, bg="#FFFFFF", padx=30, pady=22)
+
+        header = tk.Frame(main, bg=c["surface"], padx=34, pady=24)
         header.pack(fill="x")
-        tk.Label(header, text="문서 보관함", bg="#FFFFFF", fg="#202938",
-                 font=("Malgun Gothic", 20, "bold")).pack(side="left")
-        tk.Label(header, text="잠금 해제됨", bg="#E7F6EE", fg="#21834D",
-                 font=("Malgun Gothic", 9, "bold"), padx=10, pady=5).pack(side="right")
-        content = tk.Frame(main, bg="#F5F7FB", padx=28, pady=24)
+        title_area = tk.Frame(header, bg=c["surface"])
+        title_area.pack(side="left")
+        tk.Label(
+            title_area, text="문서 보관함", bg=c["surface"], fg=c["text"],
+            font=("Malgun Gothic", 21, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            title_area, text="저장된 문서를 확인하고 관리할 수 있습니다.",
+            bg=c["surface"], fg=c["muted"], font=("Malgun Gothic", 9)
+        ).pack(anchor="w", pady=(5, 0))
+        tk.Label(
+            header, text="●  잠금 해제됨", bg=c["accent_soft"],
+            fg=c["accent"], font=("Malgun Gothic", 9, "bold"),
+            padx=12, pady=7
+        ).pack(side="right")
+
+        content = tk.Frame(main, bg=c["canvas"], padx=32, pady=28)
         content.pack(fill="both", expand=True)
 
-        stats = tk.Frame(content, bg="#F5F7FB")
-        stats.pack(fill="x", pady=(0, 20))
+        stats = tk.Frame(content, bg=c["canvas"])
+        stats.pack(fill="x", pady=(0, 26))
         self.count_label = self._stat_card(stats, "저장된 문서", "0개")
         self.size_label = self._stat_card(stats, "암호화 용량", "0 B")
 
-        toolbar = tk.Frame(content, bg="#F5F7FB")
-        toolbar.pack(fill="x", pady=(0, 12))
-        tk.Label(toolbar, text="저장된 파일", bg="#F5F7FB", fg="#202938",
-                 font=("Malgun Gothic", 12, "bold")).pack(side="left")
-        ttk.Button(toolbar, text="이름 변경", command=self._rename_document).pack(side="right", padx=(6, 0))
-        ttk.Button(toolbar, text="삭제", command=self._delete_document).pack(side="right", padx=(6, 0))
-        ttk.Button(toolbar, text="열기", style="Accent.TButton",
-                   command=self._open_document).pack(side="right")
+        toolbar = tk.Frame(content, bg=c["canvas"])
+        toolbar.pack(fill="x", pady=(0, 14))
+        tk.Label(
+            toolbar, text="저장된 파일", bg=c["canvas"], fg=c["text"],
+            font=("Malgun Gothic", 12, "bold")
+        ).pack(side="left")
+        ttk.Button(
+            toolbar, text="이름 변경", command=self._rename_document
+        ).pack(side="right", padx=(8, 0))
+        ttk.Button(
+            toolbar, text="삭제", command=self._delete_document
+        ).pack(side="right", padx=(8, 0))
+        ttk.Button(
+            toolbar, text="열기", style="Accent.TButton",
+            command=self._open_document
+        ).pack(side="right")
 
-        table_card = tk.Frame(content, bg="#FFFFFF", padx=14, pady=14,
-                              highlightthickness=1, highlightbackground="#E6EAF0")
+        table_card = tk.Frame(
+            content, bg=c["surface"], padx=16, pady=16,
+            highlightthickness=1, highlightbackground=c["line"]
+        )
         table_card.pack(fill="both", expand=True)
         columns = ("name", "type", "size")
-        self.tree = ttk.Treeview(table_card, columns=columns, show="headings", selectmode="extended")
+        self.tree = ttk.Treeview(
+            table_card, columns=columns, show="headings", selectmode="extended"
+        )
         self.tree.heading("name", text="파일명", anchor="w")
         self.tree.heading("type", text="형식", anchor="center")
         self.tree.heading("size", text="암호화 크기", anchor="e")

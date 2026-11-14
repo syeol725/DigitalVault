@@ -108,15 +108,77 @@ def default_vault_directory():
     return app_directory() / "DigitalVaultData"
 
 
+def masked_password(prompt):
+    """비밀번호 입력 시 실제 문자는 숨기고 입력한 글자 수만큼 *를 표시합니다."""
+    print(prompt, end="", flush=True)
+
+    if os.name == "nt":
+        import msvcrt
+
+        chars = []
+        while True:
+            char = msvcrt.getwch()
+            if char in ("\r", "\n"):
+                print()
+                return "".join(chars)
+            if char == "\003":
+                raise KeyboardInterrupt
+            if char == "\b":
+                if chars:
+                    chars.pop()
+                    print("\b \b", end="", flush=True)
+                continue
+            if char in ("\x00", "\xe0"):
+                msvcrt.getwch()
+                continue
+            if char.isprintable():
+                chars.append(char)
+                print("*", end="", flush=True)
+
+    if sys.stdin.isatty():
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        chars = []
+        try:
+            tty.setraw(fd)
+            while True:
+                char = sys.stdin.read(1)
+                if char in ("\r", "\n"):
+                    break
+                if char == "\x03":
+                    raise KeyboardInterrupt
+                if char == "\x04":
+                    raise EOFError
+                if char in ("\x7f", "\b"):
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                    continue
+                if char.isprintable():
+                    chars.append(char)
+                    sys.stdout.write("*")
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            print()
+        return "".join(chars)
+
+    return getpass.getpass(prompt)
+
+
 def prompt_new_password():
     while True:
-        password = getpass.getpass("새 비밀번호: ")
+        password = masked_password("새 비밀번호: ")
 
         if len(password) < 8:
             print("비밀번호는 8자 이상이어야 합니다. 다시 입력하세요.")
             continue
 
-        confirm = getpass.getpass("비밀번호 확인: ")
+        confirm = masked_password("비밀번호 확인: ")
         if password != confirm:
             print("비밀번호가 일치하지 않습니다.")
             continue
@@ -284,14 +346,15 @@ class Vault:
             number = int(input("문서 번호: "))
             if 1 <= number <= len(items):
                 return items[number - 1][0]
-            return None
         except ValueError:
-            return None
+            pass
+
+        print("올바른 번호가 아닙니다.")
+        return None
 
     def export_document(self):
         file_id = self.choose_id()
         if not file_id:
-            print("올바른 번호가 아닙니다.")
             return
 
         info = self.index[file_id]
@@ -302,7 +365,7 @@ class Vault:
             root = Tk()
             root.withdraw()
             destination_text = filedialog.asksaveasfilename(
-                title="문서 내보내기 위치 선택",
+                title="문서를 내보낼 위치 선택",
                 initialfile=info["name"],
                 defaultextension=original_ext,
                 filetypes=[
@@ -352,7 +415,6 @@ class Vault:
     def open_document(self):
         file_id = self.choose_id()
         if not file_id:
-            print("올바른 번호가 아닙니다.")
             return
 
         temp_dir = None
@@ -379,20 +441,53 @@ class Vault:
                 print("임시 파일 정리를 마쳤습니다.")
 
     def delete_document(self):
-        file_id = self.choose_id()
-        if not file_id:
-            print("올바른 번호가 아닙니다.")
+        if not self.index:
+            print("저장된 문서가 없습니다.")
             return
 
-        name = self.index[file_id]["name"]
-        answer = input(f"'{name}' 문서를 삭제할까요? (y/n): ").strip().lower()
-        if answer == "y":
+        items = list(self.index.items())
+        self.list_documents()
+
+        raw_numbers = input(
+            "삭제할 문서 번호 (여러 개는 쉼표로 구분): "
+        ).strip()
+
+        if not raw_numbers:
+            print("삭제를 취소했습니다.")
+            return
+
+        try:
+            numbers = [int(value.strip()) for value in raw_numbers.split(",")]
+            if not numbers or any(
+                number < 1 or number > len(items) for number in numbers
+            ):
+                raise ValueError
+        except ValueError:
+            print("올바른 문서 번호를 입력하세요.")
+            return
+
+        # 같은 번호를 여러 번 입력해도 한 번만 처리합니다.
+        selected_ids = [items[number - 1][0] for number in dict.fromkeys(numbers)]
+        selected_names = [self.index[file_id]["name"] for file_id in selected_ids]
+
+        print("\n삭제할 문서:")
+        for name in selected_names:
+            print(f"- {name}")
+
+        answer = input(
+            f"선택한 문서 {len(selected_ids)}개를 삭제할까요? (y/n): "
+        ).strip().lower()
+
+        if answer != "y":
+            print("삭제를 취소했습니다.")
+            return
+
+        for file_id in selected_ids:
             (self.docs / (file_id + ".bin")).unlink(missing_ok=True)
             del self.index[file_id]
-            self.save_index()
-            print("문서를 삭제했습니다.")
-        else:
-            print("삭제를 취소했습니다.")
+
+        self.save_index()
+        print(f"문서 {len(selected_ids)}개를 삭제했습니다.")
 
     def change_password(self, old_password, new_password):
         try:
@@ -443,7 +538,7 @@ def main():
         print("새 금고를 생성합니다.")
         vault.create(prompt_new_password())
 
-    while not vault.login(getpass.getpass("비밀번호: ")):
+    while not vault.login(masked_password("비밀번호: ")):
         if vault.lock_status():
             return
 
@@ -470,7 +565,7 @@ def main():
             elif choice == "5":
                 vault.delete_document()
             elif choice == "6":
-                old = getpass.getpass("현재 비밀번호: ")
+                old = masked_password("현재 비밀번호: ")
                 new = prompt_new_password()
                 vault.change_password(old, new)
             else:

@@ -23,22 +23,25 @@ class DigitalVaultSecurityTests(unittest.TestCase):
         for answer in ("", "maybe", "계속", "1"):
             self.assertEqual(continue_decision(answer), "invalid")
 
-    def test_main_menu_displays_a_to_n(self):
+    def test_main_menu_displays_a_to_n_without_auto_lock(self):
         from digital_vault import show_main_menu
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            show_main_menu(299, 3)
+            show_main_menu(3)
         rendered = output.getvalue()
-        self.assertIn("자동 잠금까지 남은 시간: 04:59", rendered)
+        self.assertIn("현재 금고: 3개 문서", rendered)
         self.assertIn("A  문서 추가", rendered)
         self.assertIn("N  금고 정보", rendered)
         self.assertIn("0  금고 잠금 및 종료", rendered)
+        self.assertNotIn("자동 잠금", rendered)
+        self.assertNotIn("남은 시간", rendered)
         self.assertNotIn("선택:", rendered)
 
-    def test_menu_timer_line_has_fixed_display_width(self):
-        from digital_vault import display_width, menu_timer_line
-        self.assertEqual(display_width(menu_timer_line(299)), 58)
-        self.assertIn("04:59", menu_timer_line(299))
+    def test_read_input_waits_without_timeout(self):
+        from unittest.mock import patch
+        from digital_vault import read_input
+        with patch("builtins.input", return_value="n"):
+            self.assertEqual(read_input("계속하시겠습니까? (y/n): "), "n")
 
     def test_document_list_is_aligned_sorted_and_shows_total_size(self):
         from digital_vault import Vault

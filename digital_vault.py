@@ -27,6 +27,7 @@ FORMAT_VERSION = 2
 KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
 IDLE_TIMEOUT_SECONDS = 300
+SESSION_DEADLINE = None
 WRAP_AAD = b"DigitalVault:master-key:v2"
 INDEX_AAD = b"DigitalVault:index:v2"
 
@@ -94,15 +95,28 @@ def decrypt(key, data, aad=None):
     return AESGCM(key).decrypt(data[:12], data[12:], aad)
 
 
+def start_session_timer():
+    global SESSION_DEADLINE
+    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
+
+
+def remaining_session_seconds():
+    if SESSION_DEADLINE is None:
+        return IDLE_TIMEOUT_SECONDS
+    return max(0, int(SESSION_DEADLINE - time.monotonic() + 0.999))
+
+
 def timed_input(prompt, timeout):
-    """입력 대기 중 자동 잠금까지 남은 시간을 초 단위로 갱신합니다."""
+    """세션의 남은 자동 잠금 시간을 표시하며 입력을 기다립니다."""
+    global SESSION_DEADLINE
     chars = []
-    deadline = time.monotonic() + timeout
+    if SESSION_DEADLINE is None:
+        SESSION_DEADLINE = time.monotonic() + timeout
     last_rendered = 0
 
     def render():
         nonlocal last_rendered
-        remaining = max(0, int(deadline - time.monotonic() + 0.999))
+        remaining = remaining_session_seconds()
         line = f"{prompt} [자동 잠금 {format_duration(remaining)}] " + "".join(chars)
         sys.stdout.write("\r" + line + " " * max(0, last_rendered - len(line)))
         sys.stdout.flush()
@@ -110,10 +124,7 @@ def timed_input(prompt, timeout):
 
     if os.name == "nt":
         import msvcrt
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
+        while remaining_session_seconds() > 0:
             render()
             if msvcrt.kbhit():
                 ch = msvcrt.getwch()
@@ -131,7 +142,7 @@ def timed_input(prompt, timeout):
                         chars.pop()
                 elif ch.isprintable():
                     chars.append(ch)
-                deadline = time.monotonic() + timeout
+                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
             else:
                 time.sleep(0.1)
     else:
@@ -144,12 +155,11 @@ def timed_input(prompt, timeout):
         old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
+            while remaining_session_seconds() > 0:
                 render()
-                ready, _, _ = select.select([sys.stdin], [], [], min(0.2, remaining))
+                ready, _, _ = select.select(
+                    [sys.stdin], [], [], min(0.2, remaining_session_seconds())
+                )
                 if not ready:
                     continue
                 ch = os.read(fd, 1).decode("utf-8", errors="ignore")
@@ -166,7 +176,7 @@ def timed_input(prompt, timeout):
                     raise KeyboardInterrupt
                 elif ch.isprintable():
                     chars.append(ch)
-                deadline = time.monotonic() + timeout
+                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -267,7 +277,10 @@ def default_vault_directory():
 def masked_password(prompt, timeout=None):
     """실제 문자를 숨기고 별표로 표시합니다. timeout 초과 시 None을 반환합니다."""
     print(prompt, end="", flush=True)
-    deadline = None if timeout is None else time.monotonic() + timeout
+    global SESSION_DEADLINE
+    deadline = SESSION_DEADLINE if SESSION_DEADLINE is not None else (
+        None if timeout is None else time.monotonic() + timeout
+    )
 
     if os.name == "nt":
         import msvcrt
@@ -281,6 +294,11 @@ def masked_password(prompt, timeout=None):
                 time.sleep(0.05)
                 continue
             char = msvcrt.getwch()
+            if SESSION_DEADLINE is not None:
+                SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
+                deadline = SESSION_DEADLINE
+            elif timeout is not None:
+                deadline = time.monotonic() + timeout
             code = ord(char)
             if code in (10, 13):
                 print()
@@ -327,6 +345,11 @@ def masked_password(prompt, timeout=None):
                 if not ready:
                     continue
                 raw = os.read(fd, 1)
+                if SESSION_DEADLINE is not None:
+                    SESSION_DEADLINE = time.monotonic() + IDLE_TIMEOUT_SECONDS
+                    deadline = SESSION_DEADLINE
+                elif timeout is not None:
+                    deadline = time.monotonic() + timeout
                 if raw in (bytes([13]), bytes([10])):
                     print()
                     return "".join(chars)
@@ -1227,15 +1250,19 @@ def main():
         if vault.lock_status():
             return
 
+    start_session_timer()
     # 인증 과정의 출력(비밀번호 입력 안내 포함)을 지우고 메뉴 화면만 표시한다.
     clear_console()
     first_menu = True
     try:
         while vault.key is not None:
+            if remaining_session_seconds() <= 0:
+                vault.lock()
+                break
             if not first_menu:
                 clear_console()
             first_menu = False
-            show_main_menu(IDLE_TIMEOUT_SECONDS, len(vault.index))
+            show_main_menu(remaining_session_seconds(), len(vault.index))
 
             choice = timed_input("선택: ", IDLE_TIMEOUT_SECONDS)
             if choice is None:

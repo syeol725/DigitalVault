@@ -507,6 +507,7 @@ class Vault:
 
             shutil.rmtree(backup_docs, ignore_errors=True)
             self.key = new_key
+            self.log_event("master_key_rotated")
             print("마스터 키를 재발급하고 문서·인덱스·키 메타데이터를 갱신했습니다.")
         finally:
             shutil.rmtree(stage, ignore_errors=True)

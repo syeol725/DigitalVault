@@ -1,5 +1,6 @@
 """DigitalVault desktop GUI (Tkinter)."""
 import contextlib
+from datetime import datetime
 import io
 import json
 import os
@@ -753,6 +754,7 @@ class DigitalVaultApp:
             ("마스터 키 재발급", self._rotate_key),
             ("복구 키 재발급", self._issue_recovery),
             ("보안 기록", self._show_log),
+            ("보안 기록 무결성 검사", self._verify_security_log),
             ("보안 기록 CSV 내보내기", self._export_security_log),
         ])
 
@@ -821,6 +823,20 @@ class DigitalVaultApp:
             self.vault.show_security_log()
         self._text_window("보안 기록", output.getvalue())
 
+    def _verify_security_log(self):
+        try:
+            result, output = self._capture(self.vault.verify_security_log)
+            title = "보안 기록 검사 결과"
+            if result:
+                message = output or "보안 기록 검사가 완료되었습니다."
+                kind = "info"
+            else:
+                message = output or "보안 기록에서 이상이 발견되었습니다."
+                kind = "warning"
+            self._show_message(kind, title, message, parent=self.root)
+        except Exception as error:
+            self._show_message("error", "보안 기록 검사 실패", str(error), parent=self.root)
+
     def _export_security_log(self):
         destination = filedialog.asksaveasfilename(
             title="보안 기록 CSV 저장",
@@ -868,22 +884,145 @@ class DigitalVaultApp:
         except Exception as error:
             self._show_message("error", "백업 실패", str(error), parent=self.root)
 
+    def _show_backup_preview(self, archive, password, preview):
+        window = tk.Toplevel(self.root)
+        window.title("백업 복원 미리보기")
+        window.configure(bg="#F5F7FB")
+        window.transient(self.root)
+        window.geometry("900x620")
+        window.minsize(760, 500)
+
+        card = tk.Frame(window, bg="#FFFFFF", padx=22, pady=18)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        tk.Label(card, text="백업 복원 미리보기", bg="#FFFFFF", fg="#202938",
+                 font=("Malgun Gothic", 16, "bold")).pack(anchor="w")
+        summary = (
+            f"백업 문서 {preview['document_count']}개  ·  신규 {preview['new_count']}개  ·  "
+            f"이름 충돌 {preview['collision_count']}개\n"
+            "충돌 항목은 처리 칸을 더블클릭해 선택하세요. 기본값은 기존 문서 유지입니다."
+        )
+        tk.Label(card, text=summary, bg="#FFFFFF", fg="#667085",
+                 font=("Malgun Gothic", 9), justify="left", wraplength=820
+                 ).pack(anchor="w", pady=(8, 14))
+
+        table_frame = tk.Frame(card, bg="#FFFFFF")
+        table_frame.pack(fill="both", expand=True)
+        columns = ("name", "extension", "size", "state", "choice")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
+        headings = {
+            "name": ("파일명", 330, "w"),
+            "extension": ("형식", 90, "center"),
+            "size": ("백업 크기", 110, "e"),
+            "state": ("비교 결과", 110, "center"),
+            "choice": ("충돌 처리", 150, "center"),
+        }
+        for column, (label, width, anchor) in headings.items():
+            tree.heading(column, text=label)
+            tree.column(column, width=width, anchor=anchor, stretch=(column == "name"))
+        scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        source_by_iid = {}
+        for doc in preview["documents"]:
+            collision = bool(doc["collision_id"])
+            iid = tree.insert("", "end", values=(
+                doc["name"], doc["extension"].upper(), f"{doc['size']:,} B",
+                "이름 충돌" if collision else "신규 문서",
+                "기존 문서 유지" if collision else "추가 예정",
+            ))
+            source_by_iid[iid] = doc
+        def toggle_choice(event):
+            iid = tree.identify_row(event.y)
+            column = tree.identify_column(event.x)
+            if not iid or column != "#5":
+                return
+            doc = source_by_iid[iid]
+            if not doc["collision_id"]:
+                return
+            values = list(tree.item(iid, "values"))
+            values[4] = "백업 문서로 교체" if values[4] == "기존 문서 유지" else "기존 문서 유지"
+            tree.item(iid, values=values)
+        tree.bind("<Double-1>", toggle_choice)
+
+        note = tk.Label(card,
+            text="※ 백업 문서는 암호화 해제 검증까지 완료된 경우에만 표시됩니다. 병합 전 현재 금고를 자동 백업합니다.",
+            bg="#FFFFFF", fg="#667085", font=("Malgun Gothic", 8),
+            wraplength=820, justify="left")
+        note.pack(anchor="w", pady=(12, 8))
+
+        actions = tk.Frame(card, bg="#FFFFFF")
+        actions.pack(fill="x")
+        ttk.Button(actions, text="취소", command=window.destroy).pack(side="right", padx=(8, 0))
+        def apply_merge():
+            choices = {}
+            for iid, doc in source_by_iid.items():
+                if doc["collision_id"]:
+                    value = tree.item(iid, "values")[4]
+                    choices[doc["id"]] = "replace" if value == "백업 문서로 교체" else "keep"
+            if not self._ask_yes_no(
+                "복원 확인",
+                f"현재 금고를 먼저 자동 백업한 뒤 병합합니다.\n"
+                f"신규 {preview['new_count']}개, 충돌 {preview['collision_count']}개입니다.\n"
+                "계속할까요?",
+                parent=window
+            ):
+                return
+            window.destroy()
+            self._apply_backup_merge(archive, password, choices)
+        ttk.Button(actions, text="복원 진행", style="Accent.TButton",
+                   command=apply_merge).pack(side="right")
+        window.grab_set()
+        window.focus_set()
+
+    def _apply_backup_merge(self, archive, password, choices):
+        try:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            safety_path = self.vault.folder.parent / (
+                f"{self.vault.folder.name}-pre-restore-{stamp}.zip"
+            )
+            suffix = 1
+            while safety_path.exists():
+                safety_path = self.vault.folder.parent / (
+                    f"{self.vault.folder.name}-pre-restore-{stamp}-{suffix}.zip"
+                )
+                suffix += 1
+            current_count = len(self.vault.index)
+            self.vault.create_backup(safety_path)
+            count = self.vault.merge_backup(archive, password, choices)
+            self._refresh_documents()
+            summary = getattr(self.vault, "last_merge_summary", {})
+            self._show_message(
+                "info", "백업 불러오기 완료",
+                f"신규 추가: {summary.get('added', count)}개\n"
+                f"기존 문서 교체: {summary.get('replaced', 0)}개\n"
+                f"기존 문서 유지: {summary.get('skipped', 0)}개\n"
+                f"복원 전 자동 백업: {safety_path}\n"
+                f"기존 금고 문서 {current_count}개는 보존 기준으로 처리했습니다.",
+                parent=self.root
+            )
+        except Exception as error:
+            self._show_message("error", "백업 불러오기 실패", str(error), parent=self.root)
+
     def _merge_backup(self):
-        archive = filedialog.askopenfilename(title="불러올 백업 선택",
-            filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")], parent=self.root)
+        archive = filedialog.askopenfilename(
+            title="불러올 백업 선택",
+            filetypes=[("DigitalVault 백업", "*.zip"), ("모든 파일", "*.*")],
+            parent=self.root
+        )
         if not archive:
             return
-        password = self._ask_string("백업 인증", "백업 당시 금고 비밀번호:",
-                                           show="●", parent=self.root)
+        password = self._ask_string(
+            "백업 인증", "백업 당시 금고 비밀번호:", show="●", parent=self.root
+        )
         if password is None:
             return
         try:
-            count = self.vault.merge_backup(archive, password)
-            self._refresh_documents()
-            self._show_message("info", "백업 불러오기 완료",
-                f"문서 {count}개를 현재 금고에 병합했습니다.\n기존 문서는 유지됩니다.", parent=self.root)
+            preview = self.vault.inspect_backup(archive, password)
+            self._show_backup_preview(archive, password, preview)
         except Exception as error:
-            self._show_message("error", "백업 불러오기 실패", str(error), parent=self.root)
+            self._show_message("error", "백업 검사 실패", str(error), parent=self.root)
 
     def _integrity_check(self):
         try:

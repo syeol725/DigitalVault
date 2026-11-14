@@ -1,4 +1,5 @@
 import contextlib
+import base64
 import io
 import tempfile
 import unittest
@@ -207,7 +208,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             root = Path(directory)
             source_vault = Vault(root / "source")
             source_vault.create("source-backup-password-123")
-            source_file = root / "shared.txt"
+            source_file = root / "from-backup.txt"
             source_file.write_text("from backup", encoding="utf-8")
             source_vault.add_document(source_file)
             backup = root / "source-backup.zip"
@@ -215,7 +216,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
 
             target_vault = Vault(root / "target")
             target_vault.create("target-password-456")
-            target_file = root / "shared.txt"
+            target_file = root / "already-here.txt"
             target_file.write_text("already in target", encoding="utf-8")
             target_vault.add_document(target_file)
             original_id = next(iter(target_vault.index))
@@ -227,7 +228,7 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertIn(original_id, target_vault.index)
             self.assertEqual(
                 {item["name"] for item in target_vault.index.values()},
-                {"shared.txt", "shared (복원 1).txt"},
+                {"already-here.txt", "from-backup.txt"},
             )
             self.assertTrue(target_vault.integrity_check())
 
@@ -320,6 +321,123 @@ class DigitalVaultSecurityTests(unittest.TestCase):
             self.assertTrue(restored.login("backup-password-123"))
             self.assertTrue(restored.integrity_check())
             self.assertEqual(len(restored.index), 1)
+
+
+    def test_backup_preview_reports_conflicts_and_rejects_wrong_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            source.create("source-password-123")
+            doc = root / "shared.txt"
+            doc.write_text("backup version", encoding="utf-8")
+            source.add_document(doc)
+            backup = root / "backup.zip"
+            source.create_backup(backup)
+
+            target = Vault(root / "target")
+            target.create("target-password-123")
+            doc.write_text("current version", encoding="utf-8")
+            target.add_document(doc)
+
+            preview = target.inspect_backup(backup, "source-password-123")
+            self.assertEqual(preview["document_count"], 1)
+            self.assertEqual(preview["collision_count"], 1)
+            self.assertEqual(preview["new_count"], 0)
+            with self.assertRaises(Exception):
+                target.inspect_backup(backup, "wrong-password-123")
+
+    def test_backup_merge_conflict_keep_and_replace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Vault(root / "source")
+            source.create("source-password-123")
+            source_doc = root / "same.txt"
+            source_doc.write_text("backup version", encoding="utf-8")
+            source.add_document(source_doc)
+            backup = root / "backup.zip"
+            source.create_backup(backup)
+
+            target = Vault(root / "target")
+            target.create("target-password-123")
+            target_doc = root / "same.txt"
+            target_doc.write_text("current version", encoding="utf-8")
+            target.add_document(target_doc)
+            target_id = next(iter(target.index))
+
+            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "keep"})
+            self.assertEqual(target.last_merge_summary["skipped"], 1)
+            current = decrypt(
+                target.key, (target.docs / (target_id + ".bin")).read_bytes(),
+                ("DigitalVault:document:v2:" + target_id).encode()
+            )
+            self.assertEqual(current, b"current version")
+
+            target.merge_backup(backup, "source-password-123", {next(iter(source.index)): "replace"})
+            self.assertEqual(target.last_merge_summary["replaced"], 1)
+            replaced = decrypt(
+                target.key, (target.docs / (target_id + ".bin")).read_bytes(),
+                ("DigitalVault:document:v2:" + target_id).encode()
+            )
+            self.assertEqual(replaced, b"backup version")
+            self.assertEqual(len(target.index), 1)
+
+    def test_security_log_chain_detects_tampering_and_survives_key_rotation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Vault(Path(directory) / "vault")
+            vault.create("audit-password-123")
+            vault.log_event("test_one")
+            vault.log_event("test_two")
+            self.assertTrue(vault.verify_security_log())
+
+            path = vault.folder / "security.log"
+            lines = path.read_text(encoding="ascii").splitlines()
+            first = bytearray(base64.b64decode(lines[0]))
+            first[-1] ^= 1
+            lines[0] = base64.b64encode(first).decode("ascii")
+            path.write_text("\n".join(lines) + "\n", encoding="ascii")
+            self.assertFalse(vault.verify_security_log())
+
+    def test_security_log_rotation_rechains_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Vault(Path(directory) / "vault")
+            vault.create("audit-rotate-password-123")
+            vault.log_event("before_rotation")
+            new_key = vault.rotate_master_key("audit-rotate-password-123")
+            self.assertIsNotNone(new_key)
+            self.assertTrue(vault.verify_security_log())
+
+
+    def test_interrupted_merge_is_rolled_back_on_vault_startup(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "vault"
+            vault = Vault(folder)
+            vault.create("recovery-password-123")
+            source = Path(directory) / "original.txt"
+            source.write_text("original data", encoding="utf-8")
+            vault.add_document(source)
+            file_id = next(iter(vault.index))
+            original_doc = (vault.docs / (file_id + ".bin")).read_bytes()
+            original_index = vault.index_file.read_bytes()
+
+            stage = folder / ".vault-merge-interrupted"
+            stage.mkdir()
+            (stage / (file_id + ".old")).write_bytes(original_doc)
+            (stage / "index.old").write_bytes(original_index)
+            (vault.docs / (file_id + ".bin")).write_bytes(b"partially replaced")
+            new_id = "a" * 24
+            (vault.docs / (new_id + ".bin")).write_bytes(b"orphaned new file")
+            (folder / ".merge-recovery.json").write_text(json.dumps({
+                "state": "applying", "stage": stage.name,
+                "new_ids": [new_id], "replace_ids": [file_id],
+            }), encoding="utf-8")
+
+            recovered = Vault(folder)
+            self.assertEqual((recovered.docs / (file_id + ".bin")).read_bytes(), original_doc)
+            self.assertFalse((recovered.docs / (new_id + ".bin")).exists())
+            self.assertFalse((folder / ".merge-recovery.json").exists())
+            self.assertTrue(recovered.login("recovery-password-123"))
+            self.assertTrue(recovered.integrity_check())
 
 
 if __name__ == "__main__":

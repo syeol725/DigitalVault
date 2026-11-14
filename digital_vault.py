@@ -5,6 +5,7 @@ import base64
 import csv
 import getpass
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -29,6 +30,20 @@ KDF_PARAMS = {"name": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32}
 KDF_MAXMEM = 256 * 1024 * 1024
 WRAP_AAD = b"DigitalVault:master-key:v2"
 INDEX_AAD = b"DigitalVault:index:v2"
+
+
+
+AUDIT_AAD_V1 = b"DigitalVault:audit:v1"
+AUDIT_AAD_V2 = b"DigitalVault:audit:v2"
+AUDIT_GENESIS = "0" * 64
+
+
+def _audit_digest(key, sequence, previous, timestamp, event):
+    payload = json.dumps(
+        [int(sequence), str(previous), str(timestamp), str(event)],
+        ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 
 # ---------- 논리 게이트 ----------
@@ -293,7 +308,41 @@ class Vault:
         self.temp_prefix = "digitalvault_" + hashlib.sha256(
             str(self.folder.resolve()).encode("utf-8")
         ).hexdigest()[:12] + "_"
+        self.recover_interrupted_merge()
         self.cleanup_stale_temp_files()
+
+    def recover_interrupted_merge(self):
+        """비정상 종료로 중단된 병합을 시작 전 상태로 되돌립니다."""
+        journal_path = self.folder / ".merge-recovery.json"
+        if not journal_path.exists():
+            return
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        stage_name = journal.get("stage")
+        if (not isinstance(stage_name, str) or not stage_name.startswith(".vault-merge-")
+                or Path(stage_name).name != stage_name):
+            raise RuntimeError("중단된 병합 복구 정보가 올바르지 않습니다.")
+        stage = self.folder / stage_name
+        state = journal.get("state")
+        if state == "applying":
+            for file_id in journal.get("replace_ids", []):
+                if not isinstance(file_id, str) or len(file_id) != 24:
+                    raise RuntimeError("중단된 병합의 문서 식별자가 올바르지 않습니다.")
+                backup = stage / (file_id + ".old")
+                if not backup.is_file():
+                    raise RuntimeError("중단된 병합의 원본 문서를 찾을 수 없습니다: " + file_id)
+                atomic_write(self.docs / (file_id + ".bin"), backup.read_bytes())
+            for file_id in journal.get("new_ids", []):
+                if not isinstance(file_id, str) or len(file_id) != 24:
+                    raise RuntimeError("중단된 병합의 신규 문서 식별자가 올바르지 않습니다.")
+                (self.docs / (file_id + ".bin")).unlink(missing_ok=True)
+            old_index = stage / "index.old"
+            if not old_index.is_file():
+                raise RuntimeError("중단된 병합의 이전 인덱스 백업을 찾을 수 없습니다.")
+            atomic_write(self.index_file, old_index.read_bytes())
+        elif state != "committed":
+            raise RuntimeError("중단된 병합의 복구 상태를 확인할 수 없습니다.")
+        shutil.rmtree(stage, ignore_errors=True)
+        journal_path.unlink(missing_ok=True)
 
     @property
     def exists(self):
@@ -454,14 +503,10 @@ class Vault:
                 shutil.copy2(self.index_file, old_index)
             shutil.copy2(self.meta_file, old_meta)
             if audit_path.exists():
-                converted = []
-                for line in audit_path.read_text(encoding="ascii").splitlines():
-                    record = decrypt(self.key, base64.b64decode(line, validate=True),
-                                     b"DigitalVault:audit:v1")
-                    converted.append(base64.b64encode(
-                        encrypt(new_key, record, b"DigitalVault:audit:v1")
-                    ).decode("ascii"))
-                atomic_write(staged_audit, ("\n".join(converted) + "\n").encode("ascii"))
+                audit_records, audit_errors, _legacy = self._decode_audit_log(self.key)
+                if audit_errors:
+                    raise ValueError("보안 기록 무결성 검사에 실패해 마스터 키를 재발급할 수 없습니다.")
+                atomic_write(staged_audit, self._encode_audit_records(new_key, audit_records))
                 shutil.copy2(audit_path, old_audit)
 
             self.docs.rename(backup_docs)
@@ -856,34 +901,100 @@ class Vault:
         self.log_event("password_recovered")
         return True
 
+    def _decode_audit_log(self, key=None):
+        key = self.key if key is None else key
+        path = self.folder / "security.log"
+        if not path.exists():
+            return [], [], False
+        records, errors = [], []
+        legacy = False
+        expected_sequence, previous_hash = 0, AUDIT_GENESIS
+        for number, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+            try:
+                sealed = base64.b64decode(line, validate=True)
+                try:
+                    record = json.loads(decrypt(key, sealed, AUDIT_AAD_V2).decode("utf-8"))
+                    sequence = int(record["sequence"])
+                    previous = str(record["previous_hash"])
+                    timestamp, event = str(record["time"]), str(record["event"])
+                    expected = _audit_digest(key, sequence, previous, timestamp, event)
+                    if (sequence != expected_sequence + 1 or previous != previous_hash
+                            or not secrets.compare_digest(expected, str(record["chain_hash"]))):
+                        raise ValueError("보안 기록 연결 검증에 실패했습니다.")
+                    expected_sequence, previous_hash = sequence, expected
+                except Exception as v2_error:
+                    try:
+                        record = json.loads(decrypt(key, sealed, AUDIT_AAD_V1).decode("utf-8"))
+                        if not isinstance(record, dict) or "time" not in record or "event" not in record:
+                            raise ValueError("기록 형식이 올바르지 않습니다.")
+                        legacy = True
+                    except Exception:
+                        raise v2_error
+                records.append({"time": str(record["time"]), "event": str(record["event"])})
+            except Exception as error:
+                errors.append((number, str(error)))
+        return records, errors, legacy
+
+    def _encode_audit_records(self, key, records):
+        lines, previous_hash = [], AUDIT_GENESIS
+        for sequence, source in enumerate(records, 1):
+            timestamp, event = str(source["time"]), str(source["event"])[:64]
+            digest = _audit_digest(key, sequence, previous_hash, timestamp, event)
+            record = {
+                "version": 2, "sequence": sequence, "previous_hash": previous_hash,
+                "time": timestamp, "event": event, "chain_hash": digest,
+            }
+            sealed = encrypt(
+                key, json.dumps(record, ensure_ascii=False).encode("utf-8"),
+                AUDIT_AAD_V2
+            )
+            lines.append(base64.b64encode(sealed).decode("ascii"))
+            previous_hash = digest
+        return ("\n".join(lines) + ("\n" if lines else "")).encode("ascii")
+
+    def verify_security_log(self):
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 보안 기록을 검사할 수 있습니다.")
+        records, errors, legacy = self._decode_audit_log()
+        if errors:
+            print(f"[확인 필요] 보안 기록 {len(errors)}건에서 복호화 또는 연결 오류가 발견되었습니다.")
+            for number, _error in errors:
+                print(f"[오류] {number}번째 기록")
+            return False
+        if legacy:
+            print(f"[부분 검증] {len(records)}건의 구형 기록은 암호 인증만 확인했습니다. 신규 기록부터 연결 검증이 적용됩니다.")
+        else:
+            print(f"[정상] 보안 기록 {len(records)}건의 암호 인증 및 연결 무결성이 확인되었습니다.")
+        return True
+
     def log_event(self, event):
         if self.key is None:
             return
-        record = {
+        records, errors, _legacy = self._decode_audit_log()
+        if errors:
+            print("주의: 보안 기록 검증에 실패해 새 기록을 추가하지 않았습니다.")
+            return
+        records.append({
             "time": datetime.now(timezone.utc).isoformat(),
-            "event": str(event)[:64]
-        }
-        sealed = encrypt(self.key, json.dumps(record).encode("utf-8"),
-                         b"DigitalVault:audit:v1")
-        with (self.folder / "security.log").open("a", encoding="ascii") as stream:
-            stream.write(base64.b64encode(sealed).decode("ascii") + "\n")
+            "event": str(event)[:64],
+        })
+        atomic_write(self.folder / "security.log", self._encode_audit_records(self.key, records))
 
     def show_security_log(self):
-        path = self.folder / "security.log"
-        if not path.exists():
+        records, errors, legacy = self._decode_audit_log()
+        if not records and not errors:
             print("보안 기록이 없습니다.")
             return
-        for number, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
-            try:
-                record = json.loads(decrypt(
-                    self.key, base64.b64decode(line, validate=True),
-                    b"DigitalVault:audit:v1"
-                ))
-                print("{}  {}  {}".format(number, record["time"], record["event"]))
-            except Exception:
-                print("{}  [읽을 수 없는 기록]".format(number))
-        print("※ USB 내부 기록은 완전한 위변조 방지를 보장하지 않습니다.")
-
+        for number, record in enumerate(records, 1):
+            print("{}  {}  {}".format(number, record["time"], record["event"]))
+        for number, _error in errors:
+            print("{}  [읽을 수 없거나 연결 검증에 실패한 기록]".format(number))
+        if errors:
+            print("※ 보안 기록 무결성에 문제가 있습니다.")
+        elif legacy:
+            print("※ 구형 기록은 암호 인증만 확인했으며, 신규 기록부터 연결 검증을 적용합니다.")
+        else:
+            print("※ 보안 기록 연결 무결성 검증 완료")
     def export_security_log(self, destination):
         """복호화한 보안 기록을 Excel 호환 UTF-8 CSV로 내보냅니다."""
         if self.key is None:
@@ -901,10 +1012,11 @@ class Vault:
         lines = source.read_text(encoding="ascii").splitlines() if source.exists() else []
         for number, line in enumerate(lines, 1):
             try:
-                record = json.loads(decrypt(
-                    self.key, base64.b64decode(line, validate=True),
-                    b"DigitalVault:audit:v1"
-                ))
+                sealed = base64.b64decode(line, validate=True)
+                try:
+                    record = json.loads(decrypt(self.key, sealed, AUDIT_AAD_V2))
+                except Exception:
+                    record = json.loads(decrypt(self.key, sealed, AUDIT_AAD_V1))
                 timestamp = str(record.get("time", ""))
                 event = str(record.get("event", ""))
                 # 스프레드시트에서 수식으로 해석될 수 있는 셀 접두 문자를 무력화합니다.
@@ -965,134 +1077,243 @@ class Vault:
         self.log_event("backup_created")
         return len(files)
 
-    def merge_backup(self, archive_path, backup_password):
-        """백업을 검증·복호화한 뒤 현재 열려 있는 금고에 문서만 병합합니다."""
+    def inspect_backup(self, archive_path, backup_password):
+        """백업 전체를 검증·복호화하고 현재 금고와의 문서명 충돌을 미리 계산합니다."""
+        if self.key is None:
+            raise RuntimeError("잠금 해제된 금고에서만 백업을 확인할 수 있습니다.")
+        archive_path = Path(archive_path)
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)):
+                raise ValueError("백업에 중복 경로가 있습니다.")
+            if any(name.startswith(("/", "\\")) or ".." in Path(name).parts
+                   or "\\" in name for name in names):
+                raise ValueError("안전하지 않은 백업 경로입니다.")
+            if "backup_manifest.json" not in names:
+                raise ValueError("백업 무결성 정보가 없습니다.")
+            manifest = json.loads(archive.read("backup_manifest.json"))
+            expected = manifest.get("files")
+            if manifest.get("format") != 1 or not isinstance(expected, dict):
+                raise ValueError("지원하지 않는 백업 형식입니다.")
+            if not {"vault.json", "index.bin"}.issubset(expected):
+                raise ValueError("필수 금고 파일이 없습니다.")
+            if set(expected) - set(names) or set(names) != set(expected) | {"backup_manifest.json"}:
+                raise ValueError("백업 파일 구성이 올바르지 않습니다.")
+            payloads = {}
+            for name, digest in expected.items():
+                if name not in {"vault.json", "index.bin"} and (
+                    not name.startswith("documents/") or not name.endswith(".bin")
+                    or len(Path(name).parts) != 2
+                ):
+                    raise ValueError("허용되지 않은 백업 파일 경로입니다.")
+                data = archive.read(name)
+                if not secrets.compare_digest(hashlib.sha256(data).hexdigest(), str(digest)):
+                    raise ValueError("백업 파일 해시가 일치하지 않습니다: " + name)
+                payloads[name] = data
+
+        source_meta = json.loads(payloads["vault.json"].decode("utf-8"))
+        if source_meta.get("format_version") != FORMAT_VERSION:
+            raise ValueError("지원하지 않는 백업 금고 버전입니다.")
+        source_salt = base64.b64decode(source_meta["salt"], validate=True)
+        source_wrapped = base64.b64decode(source_meta["wrapped_key"], validate=True)
+        source_key = decrypt(
+            derive_key(backup_password, source_salt, source_meta.get("kdf")),
+            source_wrapped, WRAP_AAD
+        )
+        if len(source_key) != 32:
+            raise ValueError("백업 금고 키가 올바르지 않습니다.")
+        source_index = json.loads(
+            decrypt(source_key, payloads["index.bin"], INDEX_AAD).decode("utf-8")
+        )
+        if not isinstance(source_index, dict):
+            raise ValueError("백업 문서 목록 형식이 올바르지 않습니다.")
+
+        existing = {}
+        for file_id, info in self.index.items():
+            existing.setdefault(info.get("name", "").casefold(), (file_id, info))
+        seen_names, documents = set(), []
+        for old_id, info in source_index.items():
+            if (not isinstance(old_id, str) or len(old_id) != 24
+                    or any(ch not in "0123456789abcdef" for ch in old_id)
+                    or not isinstance(info, dict)):
+                raise ValueError("백업 문서 식별자 또는 정보가 올바르지 않습니다.")
+            name, extension = info.get("name"), info.get("extension")
+            if (not isinstance(name, str) or not name or Path(name).name != name
+                    or not isinstance(extension, str) or extension.lower() not in EXTENSIONS
+                    or Path(name).suffix.lower() != extension.lower()
+                    or name.casefold() in seen_names):
+                raise ValueError("백업에 유효하지 않거나 중복된 문서명이 있습니다.")
+            seen_names.add(name.casefold())
+            source_path = f"documents/{old_id}.bin"
+            if source_path not in payloads:
+                raise ValueError(f"백업 문서 파일이 없습니다: {name}")
+            aad = ("DigitalVault:document:v2:" + old_id).encode()
+            plain = decrypt(source_key, payloads[source_path], aad)
+            collision = existing.get(name.casefold())
+            documents.append({
+                "id": old_id, "name": name, "extension": extension.lower(),
+                "size": len(plain),
+                "collision_id": collision[0] if collision else None,
+                "collision_name": collision[1].get("name") if collision else None,
+            })
+        extra_docs = {name for name in payloads if name.startswith("documents/")}
+        expected_docs = {f"documents/{doc['id']}.bin" for doc in documents}
+        if extra_docs != expected_docs:
+            raise ValueError("백업 문서 목록과 실제 문서 파일이 일치하지 않습니다.")
+        collisions = sum(1 for doc in documents if doc["collision_id"])
+        return {
+            "created_utc": manifest.get("created_utc", ""),
+            "document_count": len(documents),
+            "new_count": len(documents) - collisions,
+            "collision_count": collisions,
+            "documents": documents,
+        }
+
+    def merge_backup(self, archive_path, backup_password, conflict_choices=None):
+        """검증된 백업을 현재 금고에 병합하고 선택된 충돌 문서만 교체합니다."""
         if self.key is None:
             raise RuntimeError("잠금 해제된 금고에서만 백업을 병합할 수 있습니다.")
-
-        archive_path = Path(archive_path)
+        conflict_choices = conflict_choices or {}
+        preview = self.inspect_backup(archive_path, backup_password)
         staged_dir = Path(tempfile.mkdtemp(prefix=".vault-merge-", dir=self.folder))
-        staged_ids = []
         previous_index = self.index.copy()
-        added = 0
-
+        staged_new, staged_replace = {}, {}
+        applied_new, applied_replace = [], []
+        added = replaced = skipped = 0
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
-                names = archive.namelist()
-                if len(names) != len(set(names)):
-                    raise ValueError("백업에 중복 경로가 있습니다.")
-                if any(name.startswith(("/", "\\")) or ".." in Path(name).parts
-                       or "\\" in name for name in names):
-                    raise ValueError("안전하지 않은 백업 경로입니다.")
-                if "backup_manifest.json" not in names:
-                    raise ValueError("백업 무결성 정보가 없습니다.")
-
                 manifest = json.loads(archive.read("backup_manifest.json"))
-                expected = manifest.get("files")
-                if manifest.get("format") != 1 or not isinstance(expected, dict):
-                    raise ValueError("지원하지 않는 백업 형식입니다.")
-                if not {"vault.json", "index.bin"}.issubset(expected):
-                    raise ValueError("필수 금고 파일이 없습니다.")
-                if set(expected) - set(names):
-                    raise ValueError("백업 파일 일부가 누락되었습니다.")
-
-                payloads = {}
-                for name, digest in expected.items():
-                    if name not in {"vault.json", "index.bin", "security.log"} and (
-                        not name.startswith("documents/") or
-                        not name.endswith(".bin") or
-                        len(Path(name).parts) != 2
-                    ):
-                        raise ValueError("허용되지 않은 백업 파일 경로입니다.")
-                    data = archive.read(name)
-                    actual = hashlib.sha256(data).hexdigest()
-                    if not secrets.compare_digest(actual, str(digest)):
-                        raise ValueError("백업 파일 해시가 일치하지 않습니다: " + name)
-                    payloads[name] = data
-
+                payloads = {
+                    name: archive.read(name)
+                    for name in manifest["files"]
+                }
             source_meta = json.loads(payloads["vault.json"].decode("utf-8"))
-            if source_meta.get("format_version") != FORMAT_VERSION:
-                raise ValueError("지원하지 않는 백업 금고 버전입니다.")
-            source_salt = base64.b64decode(source_meta["salt"], validate=True)
-            source_wrapped = base64.b64decode(source_meta["wrapped_key"], validate=True)
             source_key = decrypt(
-                derive_key(backup_password, source_salt, source_meta.get("kdf")),
-                source_wrapped, WRAP_AAD
+                derive_key(
+                    backup_password,
+                    base64.b64decode(source_meta["salt"], validate=True),
+                    source_meta.get("kdf")
+                ),
+                base64.b64decode(source_meta["wrapped_key"], validate=True),
+                WRAP_AAD
             )
-            if len(source_key) != 32:
-                raise ValueError("백업 금고 키가 올바르지 않습니다.")
-
             source_index = json.loads(
                 decrypt(source_key, payloads["index.bin"], INDEX_AAD).decode("utf-8")
             )
-            if not isinstance(source_index, dict):
-                raise ValueError("백업 문서 목록 형식이 올바르지 않습니다.")
+            existing_by_name = {
+                info.get("name", "").casefold(): (file_id, info)
+                for file_id, info in self.index.items()
+            }
+            used_names = set(existing_by_name)
+            staged_index = previous_index.copy()
 
-            existing_names = {info.get("name", "").casefold()
-                              for info in self.index.values()}
-            staged_index = {}
             for old_id, info in source_index.items():
-                if not isinstance(info, dict):
-                    raise ValueError("백업 문서 정보가 손상되었습니다.")
-                old_name = info.get("name")
-                extension = info.get("extension")
-                if (not isinstance(old_name, str) or not old_name or
-                    Path(old_name).name != old_name or
-                    not isinstance(extension, str) or
-                    extension.lower() not in EXTENSIONS or
-                    Path(old_name).suffix.lower() != extension.lower()):
-                    raise ValueError("백업에 유효하지 않은 문서 정보가 있습니다.")
+                name = info["name"]
+                collision = existing_by_name.get(name.casefold())
+                source_aad = ("DigitalVault:document:v2:" + old_id).encode()
+                plain = decrypt(source_key, payloads[f"documents/{old_id}.bin"], source_aad)
+                if collision:
+                    choice = conflict_choices.get(old_id, "keep")
+                    if choice not in {"keep", "replace"}:
+                        raise ValueError("알 수 없는 문서 충돌 처리 방식입니다.")
+                    if choice == "keep":
+                        skipped += 1
+                        continue
+                    target_id, target_info = collision
+                    target_aad = ("DigitalVault:document:v2:" + target_id).encode()
+                    staged_replace[target_id] = encrypt(self.key, plain, target_aad)
+                    staged_index[target_id] = {
+                        "name": target_info["name"],
+                        "extension": target_info["extension"],
+                    }
+                    replaced += 1
+                    continue
 
-                source_path = f"documents/{old_id}.bin"
-                if source_path not in payloads:
-                    raise ValueError(f"백업 문서 파일이 없습니다: {old_name}")
-                aad = ("DigitalVault:document:v2:" + old_id).encode()
-                plaintext = decrypt(source_key, payloads[source_path], aad)
-
-                new_name = old_name
-                if new_name.casefold() in existing_names:
-                    stem, suffix = Path(old_name).stem, Path(old_name).suffix
+                new_name = name
+                if new_name.casefold() in used_names:
+                    stem, suffix = Path(name).stem, Path(name).suffix
                     number = 1
-                    while f"{stem} (복원 {number}){suffix}".casefold() in existing_names:
+                    while f"{stem} (복원 {number}){suffix}".casefold() in used_names:
                         number += 1
                     new_name = f"{stem} (복원 {number}){suffix}"
-                existing_names.add(new_name.casefold())
-
+                used_names.add(new_name.casefold())
                 new_id = secrets.token_hex(12)
-                while new_id in self.index or new_id in staged_index:
+                while new_id in staged_index:
                     new_id = secrets.token_hex(12)
                 new_aad = ("DigitalVault:document:v2:" + new_id).encode()
-                staged_data = encrypt(self.key, plaintext, new_aad)
-                (staged_dir / (new_id + ".bin")).write_bytes(staged_data)
+                staged_new[new_id] = encrypt(self.key, plain, new_aad)
                 staged_index[new_id] = {
-                    "name": new_name,
-                    "extension": extension.lower(),
+                    "name": new_name, "extension": info["extension"].lower()
                 }
+                added += 1
 
-            # 모든 백업 문서 검증이 끝난 후 파일을 배치하고 인덱스를 한 번만 갱신한다.
-            for new_id in staged_index:
-                target = self.docs / (new_id + ".bin")
+            for file_id, data in staged_new.items():
+                (staged_dir / (file_id + ".new")).write_bytes(data)
+            for file_id, data in staged_replace.items():
+                (staged_dir / (file_id + ".new")).write_bytes(data)
+                original = (self.docs / (file_id + ".bin")).read_bytes()
+                (staged_dir / (file_id + ".old")).write_bytes(original)
+            (staged_dir / "index.old").write_bytes(self.index_file.read_bytes())
+            journal_path = self.folder / ".merge-recovery.json"
+            write_json(journal_path, {
+                "state": "applying", "stage": staged_dir.name,
+                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+            })
+
+            # 원본 파일과 인덱스 백업을 먼저 기록한 뒤 실제 문서를 교체합니다.
+            for file_id in staged_replace:
+                os.replace(staged_dir / (file_id + ".new"), self.docs / (file_id + ".bin"))
+                applied_replace.append(file_id)
+            for file_id in staged_new:
+                target = self.docs / (file_id + ".bin")
                 if target.exists():
                     raise FileExistsError("문서 ID 충돌이 발생했습니다.")
-                os.replace(staged_dir / (new_id + ".bin"), target)
-                staged_ids.append(new_id)
+                os.replace(staged_dir / (file_id + ".new"), target)
+                applied_new.append(file_id)
 
-            self.index = {**previous_index, **staged_index}
+            self.index = staged_index
             self.save_index()
-            added = len(staged_index)
+            write_json(journal_path, {
+                "state": "committed", "stage": staged_dir.name,
+                "new_ids": list(staged_new), "replace_ids": list(staged_replace),
+            })
+            self.last_merge_summary = {
+                "added": added, "replaced": replaced, "skipped": skipped,
+            }
             try:
                 self.log_event("backup_merged")
             except Exception:
-                # 감사 로그 기록 실패가 완료된 병합을 되돌리지는 않도록 한다.
                 print("주의: 병합은 완료됐지만 보안 기록을 추가하지 못했습니다.")
-            return added
+            return added + replaced
         except Exception:
             self.index = previous_index
-            for new_id in staged_ids:
-                (self.docs / (new_id + ".bin")).unlink(missing_ok=True)
+            for file_id in applied_new:
+                (self.docs / (file_id + ".bin")).unlink(missing_ok=True)
+            for file_id in applied_replace:
+                backup = staged_dir / (file_id + ".old")
+                if backup.exists():
+                    os.replace(backup, self.docs / (file_id + ".bin"))
+            try:
+                self.save_index()
+                if "journal_path" in locals():
+                    journal_path.unlink(missing_ok=True)
+            except Exception:
+                # 복구 정보는 남겨 두어 다음 실행 때 원본 상태로 복구할 수 있게 합니다.
+                pass
             raise
         finally:
-            shutil.rmtree(staged_dir, ignore_errors=True)
+            preserve_stage = False
+            if "journal_path" in locals() and journal_path.exists():
+                try:
+                    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+                    if journal.get("state") == "committed":
+                        journal_path.unlink(missing_ok=True)
+                    else:
+                        preserve_stage = True
+                except Exception:
+                    preserve_stage = True
+            if not preserve_stage:
+                shutil.rmtree(staged_dir, ignore_errors=True)
 
     @staticmethod
     def restore_backup(archive_path, destination):
@@ -1109,8 +1330,12 @@ class Vault:
                     raise ValueError("안전하지 않은 백업 경로입니다.")
                 manifest = json.loads(archive.read("backup_manifest.json"))
                 expected = manifest.get("files", {})
+                if manifest.get("format") != 1 or not isinstance(expected, dict):
+                    raise ValueError("지원하지 않는 백업 형식입니다.")
                 if "vault.json" not in expected or "index.bin" not in expected:
                     raise ValueError("필수 금고 파일이 없습니다.")
+                if set(expected) - set(names) or set(names) != set(expected) | {"backup_manifest.json"}:
+                    raise ValueError("백업 파일 구성이 올바르지 않습니다.")
                 stage.mkdir(parents=True)
                 for name, digest in expected.items():
                     data = archive.read(name)

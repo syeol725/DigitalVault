@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, ttk
 
 from digital_vault import (
     EXTENSIONS, Vault, app_directory, default_vault_directory, decrypt,
@@ -667,10 +667,19 @@ class DigitalVaultApp:
     def _text_window(self, title, text):
         window = tk.Toplevel(self.root)
         window.title(title)
-        window.geometry("760x520")
-        frame = tk.Frame(window, padx=14, pady=14)
+        window.configure(bg="#F5F7FB")
+        window.transient(self.root)
+        window.geometry("800x560")
+        window.minsize(620, 400)
+        header = tk.Frame(window, bg="#FFFFFF", padx=22, pady=16)
+        header.pack(fill="x")
+        tk.Label(header, text=title, bg="#FFFFFF", fg="#202938",
+                 font=("Malgun Gothic", 15, "bold")).pack(anchor="w")
+        frame = tk.Frame(window, bg="#F5F7FB", padx=16, pady=16)
         frame.pack(fill="both", expand=True)
-        widget = tk.Text(frame, wrap="word", font=("Consolas", 10), relief="solid", bd=1)
+        widget = tk.Text(frame, wrap="word", font=("Consolas", 10),
+                         bg="#FFFFFF", fg="#344054", insertbackground="#344054",
+                         relief="flat", padx=14, pady=14, spacing1=3)
         widget.pack(side="left", fill="both", expand=True)
         scroll = ttk.Scrollbar(frame, command=widget.yview)
         scroll.pack(side="right", fill="y")

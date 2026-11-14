@@ -1131,19 +1131,45 @@ class Vault:
         existing = {}
         for file_id, info in self.index.items():
             existing.setdefault(info.get("name", "").casefold(), (file_id, info))
-        seen_names, documents = set(), []
+        seen_names, documents = {}, []
         for old_id, info in source_index.items():
             if (not isinstance(old_id, str) or len(old_id) != 24
                     or any(ch not in "0123456789abcdef" for ch in old_id)
                     or not isinstance(info, dict)):
                 raise ValueError("백업 문서 식별자 또는 정보가 올바르지 않습니다.")
             name, extension = info.get("name"), info.get("extension")
-            if (not isinstance(name, str) or not name or Path(name).name != name
-                    or not isinstance(extension, str) or extension.lower() not in EXTENSIONS
-                    or Path(name).suffix.lower() != extension.lower()
-                    or name.casefold() in seen_names):
-                raise ValueError("백업에 유효하지 않거나 중복된 문서명이 있습니다.")
-            seen_names.add(name.casefold())
+
+            def invalid_document_name(reason, display_name=name):
+                return ValueError(
+                    "백업 문서명이 올바르지 않습니다.\\n"
+                    f"문서명: {display_name!r}\\n"
+                    f"원인: {reason}"
+                )
+
+            if not isinstance(name, str):
+                raise invalid_document_name("문서명이 문자열 형식이 아닙니다.")
+            if not name:
+                raise invalid_document_name("문서명이 비어 있습니다.")
+            if (Path(name).name != name or "/" in name or "\\\\" in name
+                    or name in {".", ".."}):
+                raise invalid_document_name("문서명에 폴더 경로 또는 사용할 수 없는 경로 문자가 포함되어 있습니다.")
+            if not isinstance(extension, str) or extension.lower() not in EXTENSIONS:
+                raise invalid_document_name(
+                    f"지원하지 않는 파일 형식입니다: {extension!r}"
+                )
+            actual_extension = Path(name).suffix.lower()
+            if actual_extension != extension.lower():
+                raise invalid_document_name(
+                    f"파일명 확장자({actual_extension or '없음'})와 "
+                    f"저장된 형식({extension})이 일치하지 않습니다."
+                )
+            normalized_name = name.casefold()
+            if normalized_name in seen_names:
+                raise invalid_document_name(
+                    "백업 안에 같은 이름의 문서가 중복되어 있습니다. "
+                    f"먼저 등록된 문서명: {seen_names[normalized_name]!r}"
+                )
+            seen_names[normalized_name] = name
             source_path = f"documents/{old_id}.bin"
             if source_path not in payloads:
                 raise ValueError(f"백업 문서 파일이 없습니다: {name}")
